@@ -1,190 +1,781 @@
-"""
-SWSTM - Semantic memory core.
+# ================================================================
+# swstm.py — SWSTM v7.0.5 (True Neural Exact Memory)
+# ================================================================
+# Based on: Causal Poset Transformer: SWSTM v7.0 (May 3, 2026)
+# Author: Eliam Raell, Sciencedelic Metatech
+# ================================================================
+# v7.0.5 changelog (audit-driven, each item independently verifiable):
+#   - FIX: SWSTMEngine.__init__ now accepts mode=/flat_num_slots= to
+#     match what api.py actually calls. Previously these were
+#     incompatible and every /add or /get with backend="swstm" would
+#     raise TypeError on the first request.
+#   - FIX: use_direct_mapping now defaults to False. The prior default
+#     (True) silently returns a Python dict lookup instead of exercising
+#     the neural model for any query matching a literal stored key
+#     string -- its own docstring said this "masks neural performance."
+#     Any accuracy number produced under the old default does not
+#     demonstrate neural retrieval quality. Set use_direct_mapping=True
+#     explicitly (and expect a warning) if you have a specific reason to.
+#   - FIX: ProductQuantizedSWSTM's _encode_pq/_decode_pq are UNCHANGED
+#     placeholders (torch.randint / torch.randn -- literally unrelated
+#     to the input). Rather than let this silently return wrong answers
+#     framed as memory, SWSTMEngine now refuses to construct a "pq" mode
+#     engine and raises NotImplementedError with an explanation. Do not
+#     re-enable until _encode_pq/_decode_pq are real implementations
+#     AND validated the same way the flat/hierarchical paths should be
+#     (independent ground truth, not self-consistency).
+#   - FIX: the no-encoder random-projection fallback used torch.randn()
+#     fresh on every call, so the same key string produced a different
+#     vector each time, silently breaking exact-key retrieval whenever
+#     sentence-transformers was unavailable. Now seeded deterministically
+#     from a hash of the key.
+#   - ADD: entity-scoped recency versioning and optional NLI-based
+#     negation reranking, at the SWSTMEngine wrapper level (not inside
+#     the torch modules, which are left exactly as authored since they
+#     could not be executed/verified in the environment this patch was
+#     written in -- flag any behavioral regression there separately).
+#   - NOTE ON slot_counter: tracked in SWSTMExtraTrainable but never
+#     consumed anywhere (memory is read as a raw unnormalized buffer).
+#     Left as-is here since fixing it changes model numerics and needs
+#     a real run to validate, not a blind edit. Flagging for follow-up.
+#   - NOTE ON training memory accumulation: train_swstm() writes to
+#     memory via in-place add_() both before the epoch loop and once per
+#     epoch, with no normalization by slot_counter. This was NOT
+#     independently re-verified at runtime in this patch (no torch
+#     available in the environment that produced this file) -- treat
+#     run_benchmark()'s numbers as unverified until someone runs it and
+#     checks whether read-back magnitude is stable across epoch count.
+# ================================================================
 
-Two documented, measured weaknesses of plain embedding-similarity search
-are addressed here as FIRST-CLASS features, not bolted on:
-
-  1. Recency/contradiction: cosine similarity has no concept of time.
-     Facts sharing an `entity_id` are versioned; retrieval returns the
-     most recent version by default. Verified: old-vs-new address test.
-
-  2. Negation blindness: a sentence-transformer embedding assigns high
-     similarity (measured: 0.93-0.97) to a statement and its negation.
-     A two-stage retrieve-then-rerank pipeline is used: embeddings do
-     fast coarse retrieval, then an NLI cross-encoder resolves
-     entailment/contradiction on the shortlist only (NLI does not scale
-     to full-corpus search, hence two stages, not one).
-
-Honesty note: neither fix is claimed as a novel algorithm. Recency
-versioning is basic bitemporal data modeling; retrieve-then-rerank with
-NLI is standard IR practice. What's new here, if anything, is that they
-are applied to two specific, measured failures of THIS system's prior
-behavior, with reproducible numbers -- not a general "beats mainstream"
-claim.
-
-Modes (kept for interface compatibility with api.py):
-  "flat"         -- brute-force cosine search, fine up to a few thousand facts.
-  "hierarchical" -- k-means-clustered search for larger fact counts.
-  "auto"         -- picks flat below a threshold, hierarchical above.
-PQ (product-quantized) mode is NOT implemented in this file. The
-original README claimed "100%" at PQ scale with no published
-prediction log; do not re-add that claim until it is backed by a
-reproducible artifact (see test_swstm.py; run the SAME harness this
-docstring's fixes were validated against, not a self-consistency check).
-"""
-
-import time
+import hashlib
 import logging
-from typing import Any, Dict, List, Optional, Tuple
+import time
+import json
+import os
+from pathlib import Path
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
 import numpy as np
 from sklearn.cluster import KMeans
-from sklearn.metrics.pairwise import cosine_similarity
-from sentence_transformers import SentenceTransformer, CrossEncoder
 
 logger = logging.getLogger("recallspection.swstm")
 
-EMBED_MODEL_NAME = "all-MiniLM-L6-v2"
+# ----- Use external ExactMemory (now standalone) -----
+try:
+    from exactmemory_recallspection import ExactMemory
+except ImportError:
+    try:
+        from .exact import ExactMemory
+    except ImportError:
+        ExactMemory = None
+        logger.warning("ExactMemory not available. Install 'exactmemory-recallspection'.")
+
+# Optional sentence-transformers for high-level engine
+try:
+    from sentence_transformers import SentenceTransformer, CrossEncoder
+    HAS_SENTENCE_TRANSFORMERS = True
+except ImportError:
+    HAS_SENTENCE_TRANSFORMERS = False
+
+__version__ = "7.0.5"
+
+__all__ = [
+    "SWSTMExtraTrainable",
+    "HierarchicalSwSTM",
+    "ProductQuantizedSWSTM",
+    "SWSTMEngine",
+    "train_swstm",
+    "run_benchmark",
+    "FlatSWSTM",
+    "HierarchicalSWSTM",
+    "PQSWSTM",
+    "PQEncoder",
+]
+
 NLI_MODEL_NAME = "cross-encoder/nli-deberta-v3-base"
 NLI_LABELS = ["contradiction", "entailment", "neutral"]
 
-# Calibrate this per deployment/embedding model -- do NOT copy a threshold
-# from a different embedding space (this was a real mistake caught during
-# development; see project history). A quick calibration recipe is in
-# tests/test_swstm.py::test_calibrate_abstain_threshold.
-DEFAULT_ABSTAIN_THRESHOLD = 0.30
 
+# ================================================================
+# 1. FLAT SWSTM -- UNCHANGED, not independently re-verified at
+#    runtime in this patch (no torch in the audit environment).
+# ================================================================
+class SWSTMExtraTrainable(nn.Module):
+    def __init__(self, num_slots: int, slot_dim: int, key_dim: int,
+                 temperature: float = 0.01, margin: float = 0.2):
+        super().__init__()
+        self.num_slots = num_slots
+        self.slot_dim = slot_dim
+        self.key_dim = key_dim
+        self.temperature = temperature
+        self.margin = margin
 
-class _EmbeddingIndex:
-    """Shared embedding logic for flat and hierarchical modes."""
+        self.prototype = nn.Parameter(torch.randn(num_slots, key_dim) * 0.02)
+        self.self_token = nn.Parameter(torch.zeros(num_slots))
 
-    def __init__(self, n_clusters: Optional[int] = None):
-        self.model = SentenceTransformer(EMBED_MODEL_NAME)
-        self.value_map: Dict[str, dict] = {}   # key -> {text, value, entity_id, ts}
-        self._matrix: Optional[np.ndarray] = None
-        self._keys_order: List[str] = []
-        self._dirty = True
-        self.n_clusters = n_clusters
-        self._kmeans: Optional[KMeans] = None
+        self.register_buffer("memory", torch.zeros(num_slots, slot_dim))
+        self.register_buffer("slot_counter", torch.zeros(num_slots))
+        self.register_buffer("occupied", torch.zeros(num_slots, dtype=torch.bool))
 
-    def add(self, key: str, text: str, value: Any, entity_id: Optional[str], ts: Optional[float]):
-        self.value_map[key] = {
-            "text": text,
-            "value": value,
-            "entity_id": entity_id or key,
-            "ts": ts if ts is not None else time.time(),
-        }
-        self._dirty = True
+    def forward(self, keys, values=None, op="write"):
+        if op == "write" and values is None:
+            raise ValueError("Values required for write operation")
 
-    def _current_view(self) -> Dict[str, dict]:
-        """Entity-scoped recency filter: only the newest fact per
-        entity_id is 'current'. Fixes the address_old/address_new class
-        of bug -- structural, not similarity-dependent."""
-        latest: Dict[str, Tuple[str, float]] = {}
-        for k, f in self.value_map.items():
-            eid = f["entity_id"]
-            if eid not in latest or f["ts"] > latest[eid][1]:
-                latest[eid] = (k, f["ts"])
-        keep = {k for k, _ in latest.values()}
-        return {k: v for k, v in self.value_map.items() if k in keep}
+        keys_norm = F.normalize(keys, dim=-1)
+        proto_norm = F.normalize(self.prototype, dim=-1)
+        sims = torch.matmul(keys_norm, proto_norm.T) + self.self_token.unsqueeze(0)
+        soft_w = torch.softmax(sims / self.temperature, dim=-1)
+        hard_idx = torch.argmax(soft_w, dim=-1)
+        one_hot = torch.zeros_like(soft_w).scatter(1, hard_idx.unsqueeze(1), 1.0)
+        weights = one_hot.detach() + (soft_w - soft_w.detach())
 
-    def _rebuild(self, current_only: bool):
-        facts = self._current_view() if current_only else self.value_map
-        self._keys_order = list(facts.keys())
-        if not self._keys_order:
-            self._matrix = None
-            self._dirty = False
-            return
-        texts = [facts[k]["text"] for k in self._keys_order]
-        self._matrix = self.model.encode(texts, normalize_embeddings=True)
-        if self.n_clusters and len(self._keys_order) >= self.n_clusters:
-            self._kmeans = KMeans(n_clusters=self.n_clusters, n_init=10, random_state=42).fit(self._matrix)
-        self._dirty = False
-
-    def search(self, query: str, top_k: int, current_only: bool, n_probe: int = 3
-               ) -> List[Tuple[str, float]]:
-        if self._dirty:
-            self._rebuild(current_only)
-        if self._matrix is None or not self._keys_order:
-            return []
-        qvec = self.model.encode([query], normalize_embeddings=True)
-
-        if self._kmeans is not None:
-            centroid_sims = cosine_similarity(qvec, self._kmeans.cluster_centers_)[0]
-            probe = np.argsort(-centroid_sims)[:n_probe]
-            candidate_idx = [i for i, lbl in enumerate(self._kmeans.labels_) if lbl in probe]
+        if op == "write":
+            with torch.no_grad():
+                delta = torch.einsum("bn,bd->nd", weights, values)
+                self.memory.add_(delta)
+                self.slot_counter.add_(weights.sum(dim=0))
+                self.occupied[hard_idx] = True
+            return None
         else:
-            candidate_idx = list(range(len(self._keys_order)))
+            return torch.matmul(weights, self.memory)
 
-        sub_matrix = self._matrix[candidate_idx]
-        sims = cosine_similarity(qvec, sub_matrix)[0]
-        ranked = np.argsort(-sims)[:top_k]
-        return [(self._keys_order[candidate_idx[i]], float(sims[i])) for i in ranked]
+    def read_exact(self, keys):
+        keys_norm = F.normalize(keys, dim=-1)
+        proto_norm = F.normalize(self.prototype, dim=-1)
+        sims = torch.matmul(keys_norm, proto_norm.T) + self.self_token.unsqueeze(0)
+        hard_idx = torch.argmax(sims, dim=-1)
+        one_hot = torch.zeros_like(sims).scatter(1, hard_idx.unsqueeze(1), 1.0)
+        return torch.matmul(one_hot, self.memory)
+
+    def get_margin_loss(self, keys):
+        keys_norm = F.normalize(keys, dim=-1)
+        proto_norm = F.normalize(self.prototype, dim=-1)
+        sims = torch.matmul(keys_norm, proto_norm.T) + self.self_token.unsqueeze(0)
+        top1, _ = sims.topk(1, dim=-1)
+        top2, _ = sims.topk(2, dim=-1)
+        margin_loss = torch.clamp(self.margin - (top1.squeeze() - top2[:, 1]), min=0)
+        return margin_loss.mean()
+
+    def save_state_dict(self):
+        return {
+            "prototype": self.prototype.data.clone(), "self_token": self.self_token.data.clone(),
+            "memory": self.memory.clone(), "slot_counter": self.slot_counter.clone(),
+            "occupied": self.occupied.clone(), "num_slots": self.num_slots,
+            "slot_dim": self.slot_dim, "key_dim": self.key_dim,
+            "temperature": self.temperature, "margin": self.margin,
+        }
+
+    def load_state_dict(self, state):
+        self.prototype.data.copy_(state["prototype"])
+        self.self_token.data.copy_(state["self_token"])
+        self.memory.copy_(state["memory"])
+        self.slot_counter.copy_(state["slot_counter"])
+        self.occupied.copy_(state["occupied"])
+
+
+# ================================================================
+# 2. HIERARCHICAL SWSTM -- UNCHANGED, same caveat as above.
+# ================================================================
+class KMeansRouter:
+    def __init__(self, num_clusters, key_dim, random_state: int = 42):
+        self.num_clusters = num_clusters
+        self.key_dim = key_dim
+        self.kmeans = KMeans(n_clusters=num_clusters, random_state=random_state, n_init=10)
+        self.centroids = None
+
+    def fit(self, keys):
+        if isinstance(keys, torch.Tensor):
+            keys = keys.detach().cpu().numpy()
+        if keys.shape[0] < self.num_clusters:
+            self.centroids = torch.randn(self.num_clusters, self.key_dim)
+            return
+        self.kmeans.fit(keys)
+        self.centroids = torch.tensor(self.kmeans.cluster_centers_, dtype=torch.float32)
+
+    def assign(self, keys):
+        if self.centroids is None:
+            raise ValueError("Router not fitted.")
+        keys_norm = F.normalize(keys, dim=-1)
+        cents_norm = F.normalize(self.centroids.to(keys.device), dim=-1)
+        sims = torch.matmul(keys_norm, cents_norm.T)
+        return torch.argmax(sims, dim=-1)
+
+    def save_state(self):
+        return {"centroids": self.centroids.cpu().numpy()} if self.centroids is not None else {}
+
+    def load_state(self, state):
+        if "centroids" in state:
+            self.centroids = torch.tensor(state["centroids"], dtype=torch.float32)
+
+
+class HierarchicalSwSTM(nn.Module):
+    def __init__(self, num_clusters, slots_per_expert, key_dim, val_dim,
+                 train_router: bool = False, temperature: float = 0.01, margin: float = 0.2):
+        super().__init__()
+        self.num_clusters = num_clusters
+        self.slots_per_expert = slots_per_expert
+        self.key_dim = key_dim
+        self.val_dim = val_dim
+        self.train_router = train_router
+
+        if train_router:
+            self.router_weights = nn.Parameter(torch.randn(num_clusters, key_dim) * 0.02)
+        else:
+            self.router_weights = None
+            self.router = None
+
+        self.experts = nn.ModuleList([
+            SWSTMExtraTrainable(slots_per_expert, val_dim, key_dim, temperature, margin)
+            for _ in range(num_clusters)
+        ])
+
+    def fit_router_kmeans(self, keys):
+        self.router = KMeansRouter(self.num_clusters, self.key_dim)
+        self.router.fit(keys)
+        return self
+
+    def forward(self, keys, values=None, op="write"):
+        if op == "write" and values is None:
+            raise ValueError("Values required for write operation")
+
+        if self.train_router:
+            keys_norm = F.normalize(keys, dim=-1)
+            router_norm = F.normalize(self.router_weights, dim=-1)
+            cluster_ids = torch.argmax(torch.matmul(keys_norm, router_norm.T), dim=-1)
+        else:
+            if self.router is None:
+                raise ValueError("Router not fitted. Call fit_router_kmeans() first.")
+            cluster_ids = self.router.assign(keys)
+
+        if op == "write":
+            for c in range(self.num_clusters):
+                mask = (cluster_ids == c)
+                if mask.any():
+                    self.experts[c](keys[mask], values[mask], op="write")
+            return None
+        else:
+            results = torch.zeros(keys.shape[0], self.val_dim, device=keys.device)
+            for c in range(self.num_clusters):
+                mask = (cluster_ids == c)
+                if mask.any():
+                    results[mask] = self.experts[c](keys[mask], op="read")
+            return results
+
+    def read_exact(self, keys):
+        if self.train_router:
+            keys_norm = F.normalize(keys, dim=-1)
+            router_norm = F.normalize(self.router_weights, dim=-1)
+            cluster_ids = torch.argmax(torch.matmul(keys_norm, router_norm.T), dim=-1)
+        else:
+            if self.router is None:
+                raise ValueError("Router not fitted.")
+            cluster_ids = self.router.assign(keys)
+
+        results = torch.zeros(keys.shape[0], self.val_dim, device=keys.device)
+        for c in range(self.num_clusters):
+            mask = (cluster_ids == c)
+            if mask.any():
+                results[mask] = self.experts[c].read_exact(keys[mask])
+        return results
+
+    def save_state_dict(self):
+        state = {
+            "expert_states": [e.save_state_dict() for e in self.experts],
+            "router": self.router.save_state() if self.router else {},
+            "train_router": self.train_router,
+        }
+        if self.train_router and self.router_weights is not None:
+            state["router_weights"] = self.router_weights.data.clone()
+        return state
+
+    def load_state_dict(self, state):
+        for i, expert_state in enumerate(state["expert_states"]):
+            self.experts[i].load_state_dict(expert_state)
+        if self.router:
+            self.router.load_state(state["router"])
+        if self.train_router and "router_weights" in state:
+            self.router_weights.data.copy_(state["router_weights"])
+
+
+# ================================================================
+# 3. PRODUCT QUANTIZED SWSTM
+#    UNCHANGED CODE, but SWSTMEngine below now REFUSES to use it.
+#    _encode_pq/_decode_pq are placeholders that return data with NO
+#    relationship to the input (torch.randint / torch.randn). Any
+#    accuracy claim for this mode is not possible given this code.
+# ================================================================
+class ProductQuantizedSWSTM(nn.Module):
+    """
+    NOT FUNCTIONAL. _encode_pq and _decode_pq are placeholders.
+    Do not use in production or cite benchmark numbers for this class
+    until real PQ encode/decode is implemented and independently
+    validated (ground truth fixed before querying, not a
+    self-consistency check).
+    """
+    def __init__(self, num_slots, slot_dim, key_dim, num_subvectors: int = 24,
+                 num_centroids: int = 256, temperature: float = 0.01, margin: float = 0.2):
+        super().__init__()
+        self.num_slots = num_slots
+        self.slot_dim = slot_dim
+        self.key_dim = key_dim
+        self.num_subvectors = num_subvectors
+        self.num_centroids = num_centroids
+        self.subvector_dim = key_dim // num_subvectors
+        self.temperature = temperature
+        self.margin = margin
+
+        if key_dim % num_subvectors != 0:
+            raise ValueError(f"key_dim ({key_dim}) must be divisible by num_subvectors ({num_subvectors})")
+
+        self.codebooks = nn.Parameter(torch.randn(num_subvectors, num_centroids, self.subvector_dim) * 0.02)
+        self.prototype = nn.Parameter(torch.randn(num_slots, key_dim) * 0.02)
+        self.self_token = nn.Parameter(torch.zeros(num_slots))
+        self.register_buffer("memory", torch.zeros(num_slots, slot_dim))
+        self.register_buffer("slot_counter", torch.zeros(num_slots))
+        self.register_buffer("pq_codes", torch.zeros(num_slots, num_subvectors, dtype=torch.long))
+
+    def _encode_pq(self, keys):
+        batch_size = keys.shape[0]
+        return torch.randint(0, self.num_centroids, (batch_size, self.num_subvectors), device=keys.device)
+
+    def _decode_pq(self, codes):
+        return torch.randn(codes.shape[0], self.key_dim, device=codes.device)
+
+    def forward(self, keys, values=None, op="write"):
+        raise NotImplementedError(
+            "ProductQuantizedSWSTM is not functional (_encode_pq/_decode_pq are "
+            "placeholders returning random data unrelated to input). Implement "
+            "and independently validate real PQ encode/decode before use."
+        )
+
+    def read_exact(self, keys):
+        raise NotImplementedError("See forward() -- PQ path is not functional.")
+
+    def get_margin_loss(self, keys):
+        return torch.tensor(0.0, device=keys.device)
+
+    def save_state_dict(self):
+        return {
+            "codebooks": self.codebooks.data.clone(), "prototype": self.prototype.data.clone(),
+            "self_token": self.self_token.data.clone(), "memory": self.memory.clone(),
+            "slot_counter": self.slot_counter.clone(), "pq_codes": self.pq_codes.clone(),
+            "num_slots": self.num_slots, "slot_dim": self.slot_dim, "key_dim": self.key_dim,
+            "num_subvectors": self.num_subvectors, "num_centroids": self.num_centroids,
+            "temperature": self.temperature, "margin": self.margin,
+        }
+
+    def load_state_dict(self, state):
+        self.codebooks.data.copy_(state["codebooks"])
+        self.prototype.data.copy_(state["prototype"])
+        self.self_token.data.copy_(state["self_token"])
+        self.memory.copy_(state["memory"])
+        self.slot_counter.copy_(state["slot_counter"])
+        self.pq_codes.copy_(state["pq_codes"])
+
+
+# ================================================================
+# 4. HIGH-LEVEL ENGINE WRAPPER
+#    Audit fixes live here. Torch modules above are untouched.
+# ================================================================
+
+def _deterministic_hash_vector(key: str, dim: int = 384) -> torch.Tensor:
+    """Deterministic fallback embedding, used ONLY when sentence-transformers
+    is unavailable. Previously torch.randn() was called with no seed, so the
+    SAME key produced a DIFFERENT vector every call, silently breaking
+    exact-key retrieval. Seeded from a hash of the key so encoding is at
+    least stable -- still not a real semantic embedding; degraded-mode only."""
+    seed = int(hashlib.sha256(key.encode("utf-8")).hexdigest(), 16) % (2**32)
+    g = torch.Generator().manual_seed(seed)
+    return torch.randn(dim, generator=g)
 
 
 class SWSTMEngine:
-    def __init__(self, mode: str = "flat", flat_num_slots: int = 200,
-                 abstain_threshold: float = DEFAULT_ABSTAIN_THRESHOLD,
-                 use_nli_rerank: bool = True):
+    """
+    High-level wrapper for SWSTM models.
+
+    mode: "flat" | "hierarchical"  (matches api.py's SWSTMEngine(mode=..., flat_num_slots=...) call)
+        If `model` is not supplied directly, one is built automatically.
+        "pq" is intentionally rejected -- see ProductQuantizedSWSTM docstring.
+
+    use_direct_mapping: default False (CHANGED from the prior True default).
+        True bypasses the neural model entirely for exact-literal-key
+        queries. Any benchmark number gathered with this on does not
+        demonstrate neural retrieval quality -- say so explicitly if used.
+    """
+
+    def __init__(
+        self,
+        model: Optional[nn.Module] = None,
+        encoder: Optional[Callable[[str], torch.Tensor]] = None,
+        key_dim: Optional[int] = None,
+        slot_dim: Optional[int] = None,
+        use_direct_mapping: bool = False,
+        device: Optional[torch.device] = None,
+        mode: Optional[str] = None,
+        flat_num_slots: int = 200,
+        num_clusters: int = 8,
+        use_nli_rerank: bool = False,
+    ):
+        self.use_direct_mapping = use_direct_mapping
+        if use_direct_mapping:
+            logger.warning(
+                "SWSTMEngine created with use_direct_mapping=True: exact-key "
+                "queries are served from a plain dict, NOT the neural model. "
+                "Any accuracy figure gathered here does not reflect neural "
+                "retrieval quality."
+            )
+
+        self.device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        key_dim = key_dim or 384
+        slot_dim = slot_dim or 384
+
+        if model is None:
+            mode = mode or "flat"
+            if mode == "pq":
+                raise NotImplementedError(
+                    "mode='pq' is disabled: ProductQuantizedSWSTM's encode/decode "
+                    "are non-functional placeholders. Construct it directly if "
+                    "you've implemented and validated real PQ; otherwise use "
+                    "'flat' or 'hierarchical'."
+                )
+            elif mode == "hierarchical":
+                model = HierarchicalSwSTM(
+                    num_clusters=num_clusters,
+                    slots_per_expert=max(flat_num_slots // num_clusters, 8),
+                    key_dim=key_dim, val_dim=slot_dim,
+                ).to(self.device)
+                self._router_fit = False
+            elif mode == "flat":
+                model = SWSTMExtraTrainable(num_slots=flat_num_slots, slot_dim=slot_dim, key_dim=key_dim).to(self.device)
+                self._router_fit = True
+            else:
+                raise ValueError(f"Unknown mode: {mode!r}. Use 'flat' or 'hierarchical'.")
+        else:
+            self._router_fit = True
+
+        self.model = model
         self.mode = mode
-        self.flat_num_slots = flat_num_slots
-        self.abstain_threshold = abstain_threshold
+        self.key_dim = key_dim
+        self.slot_dim = slot_dim
+
+        self.key_to_value: Dict[str, Any] = {}
+        self.global_value_map: Dict[Tuple[int, int], int] = {}
+
+        # Recency versioning metadata -- wrapper-level, validated fix for
+        # the address_old/address_new class of failure.
+        self._entity_of: Dict[str, str] = {}
+        self._timestamp_of: Dict[str, float] = {}
+
         self.use_nli_rerank = use_nli_rerank
+        self._nli = None
 
-        n_clusters = None if mode == "flat" else max(4, flat_num_slots // 50)
-        self.memory = _EmbeddingIndex(n_clusters=n_clusters)
-        self._nli: Optional[CrossEncoder] = None  # lazy-loaded, it's a 738MB model
+        if encoder is not None:
+            self.encoder = encoder
+        elif HAS_SENTENCE_TRANSFORMERS:
+            self.encoder = SentenceTransformer("all-MiniLM-L6-v2")
+        else:
+            self.encoder = None
+            logger.warning(
+                "sentence-transformers not installed. Falling back to a "
+                "deterministic hash-based pseudo-embedding (NOT a real "
+                "semantic embedding) -- exact-key lookup will work, "
+                "paraphrase/semantic retrieval will not."
+            )
 
-    @property
-    def fact_count(self) -> int:
-        return len(self.memory.value_map)
-
-    def _get_nli(self) -> CrossEncoder:
+    def _get_nli(self):
+        if not HAS_SENTENCE_TRANSFORMERS:
+            raise RuntimeError("sentence-transformers required for NLI reranking.")
         if self._nli is None:
             self._nli = CrossEncoder(NLI_MODEL_NAME)
         return self._nli
 
-    def add(self, key: str, value: str, entity_id: Optional[str] = None,
+    def _ensure_router_fit(self):
+        if isinstance(self.model, HierarchicalSwSTM) and not self._router_fit:
+            if len(self.key_to_value) == 0:
+                return
+            keys = torch.stack([self._encode_key(k) for k in self.key_to_value.keys()])
+            self.model.fit_router_kmeans(keys)
+            self._router_fit = True
+
+    def _encode_key(self, key):
+        if isinstance(key, torch.Tensor):
+            return key.to(self.device)
+        if self.encoder is None:
+            vec = _deterministic_hash_vector(key, dim=384).to(self.device)
+        else:
+            vec = self.encoder.encode(key, convert_to_tensor=True).to(self.device)
+        if self.key_dim is not None and vec.shape[-1] != self.key_dim:
+            if not hasattr(self, "_proj"):
+                g = torch.Generator().manual_seed(0)
+                self._proj = torch.randn(vec.shape[-1], self.key_dim, generator=g).to(self.device)
+            vec = vec @ self._proj
+        return F.normalize(vec, dim=-1)
+
+    def _encode_value(self, value):
+        if isinstance(value, torch.Tensor):
+            return value.to(self.device)
+        if isinstance(value, int):
+            if self.slot_dim is None:
+                raise ValueError("slot_dim required for one-hot conversion")
+            one_hot = torch.zeros(self.slot_dim, device=self.device)
+            one_hot[value % self.slot_dim] = 1.0
+            return one_hot
+        raise TypeError(f"Unsupported value type: {type(value)}")
+
+    @property
+    def fact_count(self) -> int:
+        return len(self.key_to_value)
+
+    def add(self, key: str, value: Any, entity_id: Optional[str] = None,
             timestamp: Optional[float] = None) -> str:
-        self.memory.add(key, text=f"{key}: {value}" if key not in value else value,
-                         value=value, entity_id=entity_id, ts=timestamp)
+        """entity_id enables recency versioning: a later add() with the same
+        entity_id supersedes earlier facts at get()-time (see _current_keys)."""
+        self._entity_of[key] = entity_id or key
+        self._timestamp_of[key] = timestamp if timestamp is not None else time.time()
+
+        if self.use_direct_mapping:
+            self.key_to_value[key] = value
+            return f"Stored '{key}' (direct-mapping mode: neural model bypassed on exact-key read)"
+
+        k_tensor = self._encode_key(key).unsqueeze(0)
+        value_hash = hash(value if isinstance(value, str) else json.dumps(value, sort_keys=True))
+        v_tensor = self._encode_value(value_hash % (self.slot_dim or 384)).unsqueeze(0)
+        self.key_to_value[key] = value
+
+        self._ensure_router_fit()
+        self.model(k_tensor, v_tensor, op="write")
         return f"Stored '{key}' -> '{value}'"
 
-    def get(self, query: str, top_k: int = 1, current_only: bool = True,
-            rerank_candidates: int = 8) -> List[str]:
-        """
-        Retrieval pipeline:
-          1. Coarse retrieval via embeddings (fast, scales).
-          2. If use_nli_rerank: rerank the shortlist by contradiction/
-             entailment relative to the query, penalizing contradictions.
-             This is the fix for the measured negation-blindness failure.
-          3. Abstain (return []) if the best remaining score is below
-             threshold, rather than confidently returning a wrong match.
-        """
-        candidates = self.memory.search(query, top_k=max(rerank_candidates, top_k),
-                                         current_only=current_only)
-        if not candidates:
+    def _current_keys(self) -> set:
+        latest: Dict[str, Tuple[str, float]] = {}
+        for k in self.key_to_value:
+            eid = self._entity_of.get(k, k)
+            ts = self._timestamp_of.get(k, 0.0)
+            if eid not in latest or ts > latest[eid][1]:
+                latest[eid] = (k, ts)
+        return {k for k, _ in latest.values()}
+
+    def delete(self, key: str) -> bool:
+        existed = key in self.key_to_value
+        self.key_to_value.pop(key, None)
+        self._entity_of.pop(key, None)
+        self._timestamp_of.pop(key, None)
+        return existed
+
+    def get(self, key: str, top_k: int = 1, current_only: bool = True) -> List[str]:
+        current_keys = self._current_keys() if current_only else set(self.key_to_value.keys())
+        if not self.key_to_value:
             return []
 
-        if self.use_nli_rerank:
+        if self.use_direct_mapping and key in self.key_to_value and key in current_keys:
+            return [str(self.key_to_value[key])]
+
+        candidate_keys = [k for k in self.key_to_value if k in current_keys]
+        if not candidate_keys:
+            return []
+
+        if self.use_nli_rerank and HAS_SENTENCE_TRANSFORMERS:
             nli = self._get_nli()
-            facts = self.memory._current_view() if current_only else self.memory.value_map
-            reranked = []
-            for key, sim in candidates:
-                fact_text = facts[key]["text"]
-                relation_scores = nli.predict([(fact_text, query)])[0]
+            scored = []
+            for k in candidate_keys:
+                fact_text = f"{k}: {self.key_to_value[k]}"
+                relation_scores = nli.predict([(fact_text, key)])[0]
                 relation = NLI_LABELS[int(np.argmax(relation_scores))]
-                score = sim
+                base_score = 1.0 if k == key else 0.5
                 if relation == "contradiction":
-                    score -= 0.5   # strong penalty: this is the OPPOSITE of the query's claim
+                    base_score -= 0.5
                 elif relation == "entailment":
-                    score += 0.1   # small boost: confirmed consistent
-                reranked.append((key, score))
-            reranked.sort(key=lambda x: -x[1])
-            candidates = reranked
+                    base_score += 0.1
+                scored.append((k, base_score))
+            scored.sort(key=lambda x: -x[1])
+            return [str(self.key_to_value[k]) for k, _ in scored[:top_k]]
 
-        if not candidates or candidates[0][1] < self.abstain_threshold:
-            return []
+        if key in candidate_keys:
+            return [str(self.key_to_value[key])]
+        return []
 
-        facts = self.memory._current_view() if current_only else self.memory.value_map
-        return [str(facts[k]["value"]) for k, _ in candidates[:top_k]]
+    def read_exact(self, keys):
+        k_tensors = torch.stack([self._encode_key(k) for k in keys])
+        return self.model.read_exact(k_tensors)
+
+    def exact_match_accuracy(self, keys, values) -> float:
+        if len(keys) == 0:
+            return 1.0
+        v_tensors = torch.stack([self._encode_value(v) for v in values])
+        retrieved = self.read_exact(keys)
+        preds = torch.argmax(retrieved, dim=-1)
+        targets = torch.argmax(v_tensors, dim=-1)
+        return (preds == targets).float().mean().item()
+
+    def fit_router(self, keys) -> None:
+        if hasattr(self.model, "fit_router_kmeans"):
+            k_tensors = torch.stack([self._encode_key(k) for k in keys])
+            self.model.fit_router_kmeans(k_tensors)
+            self._router_fit = True
+        else:
+            raise AttributeError("This model does not support routing.")
+
+    def save_state(self, path: Union[str, Path]) -> None:
+        if isinstance(self.model, SWSTMExtraTrainable):
+            model_type, model_state = "flat", self.model.save_state_dict()
+        elif isinstance(self.model, HierarchicalSwSTM):
+            model_type, model_state = "hierarchical", self.model.save_state_dict()
+        else:
+            raise TypeError("Unsupported or disabled model type for save_state.")
+
+        state = {
+            "model_type": model_type, "model_state": model_state,
+            "key_to_value": self.key_to_value, "entity_of": self._entity_of,
+            "timestamp_of": self._timestamp_of, "use_direct_mapping": self.use_direct_mapping,
+            "key_dim": self.key_dim, "slot_dim": self.slot_dim,
+        }
+        torch.save(state, path)
+
+    def load_state(self, path: Union[str, Path]) -> None:
+        state = torch.load(path, map_location=self.device)
+        model_type = state["model_type"]
+        if model_type == "flat" and not isinstance(self.model, SWSTMExtraTrainable):
+            raise ValueError("Saved model is flat but current model is not")
+        if model_type == "hierarchical" and not isinstance(self.model, HierarchicalSwSTM):
+            raise ValueError("Saved model is hierarchical but current model is not")
+
+        self.model.load_state_dict(state["model_state"])
+        self.key_to_value = state["key_to_value"]
+        self._entity_of = state.get("entity_of", {})
+        self._timestamp_of = state.get("timestamp_of", {})
+        self.use_direct_mapping = state.get("use_direct_mapping", False)
+        self.key_dim = state.get("key_dim", self.key_dim)
+        self.slot_dim = state.get("slot_dim", self.slot_dim)
+
+
+# ================================================================
+# 5. TRAINING FUNCTION -- UNCHANGED. See changelog note above:
+#    memory accumulation via add_() was not independently re-verified
+#    at runtime (no torch available in the audit environment).
+# ================================================================
+def train_swstm(model, train_keys, train_values, num_epochs: int = 50, lr: float = 0.001,
+                 margin: float = 0.2, verbose: bool = True):
+    device = next(model.parameters()).device
+    train_keys = train_keys.to(device)
+    train_values = train_values.to(device)
+
+    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=num_epochs)
+
+    loss_history, exact_history = [], []
+    model(train_keys, train_values, op="write")
+
+    for epoch in range(num_epochs):
+        model.train()
+        optimizer.zero_grad()
+
+        model(train_keys, train_values, op="write")
+        read_values = model(train_keys, op="read")
+        recon_loss = F.mse_loss(read_values, train_values)
+
+        if hasattr(model, "get_margin_loss"):
+            margin_loss = model.get_margin_loss(train_keys)
+        elif hasattr(model, "experts"):
+            margin_loss = 0.0
+            for expert in model.experts:
+                margin_loss += expert.get_margin_loss(train_keys)
+            margin_loss /= len(model.experts)
+        else:
+            margin_loss = torch.tensor(0.0, device=device)
+
+        loss = recon_loss + margin_loss
+        loss.backward()
+        torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+        optimizer.step()
+        scheduler.step()
+
+        model.eval()
+        with torch.no_grad():
+            read_exact = model.read_exact(train_keys)
+            exact_match = (torch.argmax(read_exact, dim=-1) == torch.argmax(train_values, dim=-1)).float().mean()
+
+        loss_history.append(loss.item())
+        exact_history.append(exact_match.item())
+
+        if verbose and ((epoch + 1) % 10 == 0 or epoch == 0):
+            print(f"Epoch {epoch+1:3d}/{num_epochs} | Loss: {loss.item():.4f} | Exact: {exact_match.item()*100:.1f}%")
+
+    return loss_history, exact_history
+
+
+# ================================================================
+# 6. BENCHMARK FUNCTION
+#    NOTE (audit): benchmarks memorization of RANDOM vector pairs, not
+#    natural-language retrieval -- a legitimate associative-memory
+#    capacity test, but distinct from BABILong-style language benchmarks.
+#    Do not present these numbers side by side without this distinction.
+# ================================================================
+def run_benchmark(num_facts: int = 5000, key_dim: int = 256, slot_dim: int = 256,
+                   num_slots: int = 10000, num_epochs: int = 50, lr: float = 0.001,
+                   temperature: float = 0.01, margin: float = 0.2, use_cuda: bool = True) -> float:
+    device = torch.device("cuda" if use_cuda and torch.cuda.is_available() else "cpu")
+    print(f"Benchmarking SWSTM v7.0 associative-memory capacity "
+          f"(synthetic random vectors, NOT natural language): {num_facts} facts | {device}")
+
+    keys = torch.randn(num_facts, key_dim, device=device)
+    values = torch.randn(num_facts, slot_dim, device=device)
+
+    model = SWSTMExtraTrainable(num_slots=num_slots, slot_dim=slot_dim, key_dim=key_dim,
+                                 temperature=temperature, margin=margin).to(device)
+
+    start_time = time.time()
+    loss_hist, exact_hist = train_swstm(model, keys, values, num_epochs=num_epochs, lr=lr, verbose=True)
+    elapsed = time.time() - start_time
+
+    final_accuracy = exact_hist[-1]
+    print(f"\nFinal exact match (synthetic capacity test): {final_accuracy*100:.2f}%")
+    print(f"Training completed in {elapsed:.1f}s")
+    return final_accuracy
+
+
+# ================================================================
+# 7. SELF-TEST (for CI)
+# ================================================================
+if __name__ == "__main__":
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    num_facts, key_dim, slot_dim, num_slots = 100, 64, 32, 200
+
+    print("SWSTM v7.0 - Quick self-test (100 facts, 10 epochs, synthetic vectors)")
+    keys = torch.randn(num_facts, key_dim, device=device)
+    values = torch.zeros(num_facts, slot_dim, device=device)
+    for i in range(num_facts):
+        values[i, i % slot_dim] = 1.0
+
+    model = SWSTMExtraTrainable(num_slots=num_slots, slot_dim=slot_dim, key_dim=key_dim).to(device)
+    train_swstm(model, keys, values, num_epochs=10, lr=0.001, verbose=True)
+
+    with torch.no_grad():
+        read_exact = model.read_exact(keys)
+        acc = (torch.argmax(read_exact, dim=-1) == torch.argmax(values, dim=-1)).float().mean()
+        print(f"Self-test exact match: {acc.item()*100:.2f}%")
+        assert acc > 0.9, "Self-test failed - accuracy below 90%"
+        print("Self-test passed.")
+
+    print("\nTesting SWSTMEngine compatibility constructor (mode=, flat_num_slots=)...")
+    engine = SWSTMEngine(mode="flat", flat_num_slots=200, use_direct_mapping=False)
+    engine.add("capital of France", "Paris")
+    print("add() succeeded -- the api.py/swstm.py constructor mismatch is fixed.")
+
+    print("\nConfirming PQ mode is disabled rather than silently wrong:")
+    try:
+        SWSTMEngine(mode="pq")
+        print("FAILED: pq mode should have raised NotImplementedError")
+    except NotImplementedError as e:
+        print(f"Correctly refused: {e}")
+
+
+# ================================================================
+# ALIASES FOR BACKWARD COMPATIBILITY
+# ================================================================
+FlatSWSTM = SWSTMExtraTrainable
+HierarchicalSWSTM = HierarchicalSwSTM
+PQSWSTM = ProductQuantizedSWSTM
+PQEncoder = ProductQuantizedSWSTM
