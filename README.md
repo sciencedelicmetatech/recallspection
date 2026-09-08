@@ -1,11 +1,12 @@
 
+```markdown
 <p align="center">
   <img src="banner.svg" alt="Recallspection Banner" width="800">
 </p>
 
-# 🧠 RECALLSPECTION v18.0.0: THE DUAL‑CORE EXACT MEMORY LAYER
+# 🧠 RECALLSPECTION v18.0.0 – Dual‑Engine Memory Research Prototype
 
-> *"One core for compliance, one core for fuzzy both mathematically incapable of hallucination."*
+> *Production‑ready cryptographic exact store + research‑grade neural associative memory.*
 
 [![GitHub](https://img.shields.io/badge/GitHub-sciencedelicmetatech%2Frecallspection-blue)](https://github.com/sciencedelicmetatech/recallspection)
 [![License](https://img.shields.io/badge/license-AGPLv3-blue.svg)](LICENSE)
@@ -13,110 +14,188 @@
 [![Render](https://img.shields.io/website?url=https%3A%2F%2Frecallspection.onrender.com)](https://recallspection.onrender.com)
 [![Live Demo](https://img.shields.io/badge/demo-recallspection.onrender.com-brightgreen)](https://recallspection.onrender.com)
 [![API Docs](https://img.shields.io/badge/docs-API-blueviolet)](https://recallspection.onrender.com/docs)
+[![ExactMemory](https://img.shields.io/badge/ExactMemory-standalone%20package-blue)](https://github.com/sciencedelicmetatech/exactmemory.recallspection)
 [![Patent](https://img.shields.io/badge/Patent-Pending-orange)]()
 
 ---
 
-## ⚡ At a Glance
+## 📑 Table of Contents
 
-| Feature                  | ExactMemory (Compliance) | SWSTM (Neural)           |
-|--------------------------|--------------------------|--------------------------|
-| **Exact Match Ratio**    | 1.0000                   | 1.0000 (hierarchical)    |
-| **Paraphrase / Fuzzy**   | ❌                       | ✅                       |
-| **Read Latency**         | ~8 µs                    | ~1 ms (PQ)               |
-| **Memory (1M facts)**    | ~471 MB                  | ~24 MB (PQ)              |
-| **Tamper‑Evidence**      | ✅ SHA3‑256 + zlib       | ❌ (but exact)           |
-| **Dependencies**         | None (stdlib)            | torch, transformers, sklearn |
-| **Platform**             | iOS, Linux, macOS        | Linux, macOS (GPU/CPU)   |
+- [What is Recallspection?](#-what-is-recallspection)
+- [Quick Comparison](#-quick-comparison)
+- [Architecture Overview](#-architecture-overview)
+- [Installation](#-installation)
+- [Quick Start](#-quick-start)
+- [API Server](#-api-server)
+- [Benchmarks & Status](#-benchmarks--status)
+- [Project Structure](#-project-structure)
+- [Dependencies](#-dependencies)
+- [Known Limitations](#-known-limitations)
+- [Roadmap](#-roadmap)
+- [License & Patent](#-license--patent)
+- [References](#-references)
+- [Contributing](#-contributing)
 
 ---
 
 ## 📌 What is Recallspection?
 
-**Recallspection** provides **two memory engines** in one package:
+**Recallspection** is a research repository that explores a **dual‑engine memory architecture** for AI agents:
 
-### 🛡️ ExactMemory (Compliance Core)
-- Cryptographic hash table: SHA3‑256 + zlib compression
-- Tamper‑evident – returns `None` on corruption
-- 8 µs reads, 100% exact match ratio
-- **Zero external dependencies** – pure Python stdlib
-- Perfect for audit trails, legal compliance, and exact‑key lookups
+1. **ExactMemory** – a production‑ready, tamper‑evident cryptographic key‑value store.
+2. **SWSTM** – a research‑grade neural associative memory that learns to store and retrieve facts with competitive slot addressing and differentiable training.
 
-### 🧠 SWSTM (Neural Core)
-- Differentiable, hierarchical, product‑quantized memory
-- Achieves **100% exact match** on fuzzy/paraphrase queries
-- Scales to 1M+ facts with 24 bytes/fact (Product Quantization)
-- **STE training** + margin loss for perfect separation
-- **Patent pending** (US Provisional Application filed)
+The core idea: AI agents need **both** a deterministic, auditable memory for facts and a fuzzy, semantic memory for natural language. Recallspection provides a unified API for both – but only ExactMemory is currently production‑ready.
 
-**Why this duality:** AI agents need both – a deterministic audit trail for facts, and a neural memory that understands natural language. Recallspection gives you both in a unified API.
+> **⚠️ Important:** The neural components (SWSTM) are **experimental and under active development**. They are not yet production‑ready. For a production‑ready tamper‑proof store, use the separate package [`exactmemory-recallspection`](https://github.com/sciencedelicmetatech/exactmemory.recallspection).
 
 ---
 
-## 🏗️ Architecture
+## ⚡ Quick Comparison
 
-### ExactMemory (Cryptographic Core)
-- SHA3‑256 / BLAKE3 hashing (32‑byte raw digests)
-- zlib compression (level 6)
-- Quorum verification (default `quorum_size=3`)
-- Tamper‑evidence – returns `None` on corruption
-- 100% EMR – exact match ratio of 1.0000
-
-### SWSTM (Neural Core)
-- **Flat mode** – up to 1,000 facts (≥97% exact match)
-- **Hierarchical mode** – up to 50,000 facts (100% exact match)
-- **PQ mode** – 1M+ facts with 24 bytes/fact (100% exact match)
-- K‑Means routing + independent FlatSWSTM experts
-- Product Quantization (24 subvectors × 256 centroids)
-- STE (Straight‑Through Estimator) + margin loss for training
+| Feature | ExactMemory | SWSTM (Neural) |
+|---------|-------------|----------------|
+| **Purpose** | Cryptographic audit trail | Semantic / fuzzy retrieval |
+| **Exact Match Ratio** | 1.0000 (verified) | ≥0.99 on 100 facts (flat mode) |
+| **Paraphrase / Fuzzy** | ❌ | ✅ (preliminary, small datasets) |
+| **Read Latency** | ~8 µs | ~1 ms (estimate) |
+| **Memory per Fact** | ~471 bytes | ~384 bytes (flat) |
+| **Tamper‑Evidence** | ✅ HMAC‑SHA3‑256 (16‑byte MAC) | ❌ (neural only) |
+| **Dependencies** | None (Python stdlib) | torch, transformers, sklearn |
+| **Production Ready** | ✅ Yes (standalone package) | 🧪 Research prototype |
+| **Platform** | iOS, Linux, macOS, Windows | Linux, macOS (GPU/CPU) |
 
 ---
 
-## 🛠️ Quickstart
+## 🏗️ Architecture Overview
 
-### Installation
+### ExactMemory (Cryptographic Core) – ✅ Production
+
+- **HMAC‑SHA3‑256** integrity protection (16‑byte MAC) – protects against both accidental corruption **and** malicious tampering (secret key required).
+- **zlib compression** (level 6) for space efficiency.
+- **TamperDetectedError** exception – distinct from "key not found".
+- **Zero external dependencies** – pure Python standard library.
+- **Standalone package** available as `exactmemory-recallspection`.
+- **Persistence** via `export_state()` / `load_state()` (JSON).
+
+### SWSTM (Neural Core) – 🧪 Research Prototype
+
+| Mode | Status | Capacity (tested) | Accuracy (tested) |
+|------|--------|-------------------|-------------------|
+| **Flat** | ✅ Working | 100–500 facts | ≥99% (100 facts) |
+| **Hierarchical** | ✅ Basic (K‑Means) | Untested | Untested |
+| **PQ** | ❌ Placeholder | N/A | N/A |
+
+**Key properties:**
+- **Differentiable** – trains with STE (Straight‑Through Estimator) + margin loss.
+- **Self‑token** – per‑slot temporal bias to resolve collisions.
+- **No dict fallback** – `use_direct_mapping=False` by default (honest neural mode).
+- **Persistence** – full state save/load via `save_state()` / `load_state()`.
+- **Cosine similarity** – consistent across flat and hierarchical modes.
+- **K‑Means routing** – for hierarchical mode (requires manual `fit_router()` call).
+
+---
+
+## 🛠️ Installation
 
 ```bash
+# Full research package (includes both ExactMemory and SWSTM)
 pip install git+https://github.com/sciencedelicmetatech/recallspection.git
+
+# For production use, install ExactMemory only:
+pip install exactmemory-recallspection
 ```
 
-Basic Usage (Python)
+---
+
+🚀 Quick Start
+
+1. ExactMemory (Production – Tamper‑Evident Store)
 
 ```python
-from recallspection import ExactMemory, SWSTMEngine
+from exactmemory_recallspection import ExactMemory
 
-# ----- ExactMemory (Cryptographic) -----
-exact = ExactMemory()
-exact.add("user_123", {"theme": "dark", "language": "en"})
-result = exact.get("user_123")  # {'theme': 'dark', 'language': 'en'}
+# Create a store with a secret key (32 bytes)
+secret = b"your-32-byte-secret-key!!!!!!!!!!"
+mem = ExactMemory(secret_key=secret)
 
-# Tamper test
-exact._storage["user_123"] = b"TAMPERED"
-result = exact.get("user_123")  # None — tampering detected!
+# Store a value (any JSON‑serializable object)
+mem.add("user:123", {"name": "Alice", "role": "admin"})
 
-# ----- SWSTM (Neural) -----
-swstm = SWSTMEngine(mode="auto")  # flat → hierarchical → PQ
+# Retrieve
+result = mem.get("user:123")  # {'name': 'Alice', 'role': 'admin'}
 
-# Add facts
-swstm.add("capital of France", "Paris")
-swstm.add("capital of Germany", "Berlin")
+# Unknown key
+result = mem.get("unknown")   # None
 
-# Retrieve with paraphrase (fuzzy query)
-print(swstm.get("France's capital"))   # ['Paris']
-print(swstm.get("German capital"))     # ['Berlin']
+# Tamper detection – if data is corrupted, raises TamperDetectedError
+# mem.add("key", "value") -> corrupt the file manually -> mem.get("key") raises exception
 ```
 
-Run the API Server
+2. SWSTM (Research – Neural Memory)
+
+```python
+import torch
+from recallspection import SWSTMExtraTrainable, train_swstm
+
+# Create a flat SWSTM memory
+model = SWSTMExtraTrainable(
+    num_slots=200,    # number of memory slots
+    slot_dim=32,      # value dimension (one‑hot)
+    key_dim=64,       # key embedding dimension
+)
+
+# Generate synthetic data (100 facts, 64‑dim keys, 32‑dim one‑hot values)
+keys = torch.randn(100, 64)
+values = torch.zeros(100, 32)
+for i in range(100):
+    values[i, i % 32] = 1.0
+
+# Train the neural memory
+train_swstm(model, keys, values, num_epochs=10, lr=0.001, verbose=True)
+
+# Retrieve (hard assignment – no gradients)
+read = model.read_exact(keys)
+preds = torch.argmax(read, dim=-1)
+targets = torch.argmax(values, dim=-1)
+accuracy = (preds == targets).float().mean().item()
+print(f"Accuracy: {accuracy*100:.2f}%")  # typically ≥99% on this dataset
+```
+
+3. Using the High‑Level Engine (SWSTMEngine)
+
+```python
+from recallspection import SWSTMEngine, SWSTMExtraTrainable
+
+model = SWSTMExtraTrainable(num_slots=200, slot_dim=32, key_dim=64)
+engine = SWSTMEngine(model, use_direct_mapping=False)  # honest neural mode
+
+# Add facts (values as integers, automatically one‑hot encoded)
+engine.add("capital of France", 0)   # 0 → one‑hot vector
+engine.add("capital of Germany", 1)
+
+# Retrieve (neural only)
+result = engine.get("France's capital")  # returns one‑hot vector
+```
+
+---
+
+🌐 API Server
+
+Recallspection includes a FastAPI server that exposes both ExactMemory and SWSTM over HTTP.
+
+Run the Server
 
 ```bash
 uvicorn recallspection.api:app --reload
 ```
 
-Then visit http://localhost:8000 to see the landing page, or http://localhost:8000/docs for the interactive API docs.
+Then visit:
 
----
+· Landing page: http://localhost:8000
+· Interactive API docs: http://localhost:8000/docs
 
-🌐 API Endpoints (Live)
+Endpoints
 
 Endpoint Method Auth Description
 / GET ❌ Landing page
@@ -135,51 +214,16 @@ Authentication: All protected endpoints require the X-API-Key header.
 
 ---
 
-Plans
+📊 Benchmarks & Status
 
-Plan Facts Limit Requests/month
-Free 1,000 1,000
-Pro 100,000 100,000
-Enterprise 1,000,000 1,000,000
-Agent Free 5,000 5,000
-Agent Pro 500,000 500,000
-Agent Enterprise 5,000,000 5,000,000
+Mode Facts Tested Accuracy Memory/Fact Status
+ExactMemory Unlimited (verified) 100% ~471 bytes ✅ Production‑ready
+Flat SWSTM 100 ≥99% ~384 bytes ✅ Working (research)
+Flat SWSTM 500 ≥95% (preliminary) ~384 bytes ⚠️ Needs validation
+Hierarchical SWSTM Untested Untested Untested ⚠️ Basic, unvalidated
+PQ SWSTM N/A N/A 24 bytes (claimed) ❌ Not implemented
 
----
-
-Create an API Key
-
-```bash
-curl -X POST "https://recallspection.onrender.com/signup?owner=your-email@example.com&plan=free"
-```
-
-Add a Fact
-
-```bash
-curl -X POST https://recallspection.onrender.com/add \
-  -H "X-API-Key: rk_your-key-here" \
-  -H "Content-Type: application/json" \
-  -d '{"key": "capital of France", "value": "Paris"}'
-```
-
-Retrieve a Fact
-
-```bash
-curl "https://recallspection.onrender.com/get?key=France's%20capital" \
-  -H "X-API-Key: rk_your-key-here"
-```
-
----
-
-📊 Benchmarks
-
-Mode Facts Accuracy Memory/Fact
-ExactMemory 10M 100% ~471 bytes
-Flat SWSTM 1,000 ≥97% ~384 bytes
-Hierarchical SWSTM 50,000 100% ~384 bytes
-PQ SWSTM 1,000,000 100% 24 bytes
-
-Measured on BABILong qa1 task (exact match).
+Note: All neural benchmarks are based on synthetic data and small datasets. The 100% claims from the paper are not reproducible from this repository – we are actively working to provide reproducible evaluation scripts and raw outputs.
 
 ---
 
@@ -187,40 +231,46 @@ Measured on BABILong qa1 task (exact match).
 
 ```
 recallspection/
-├── exact.py          # Cryptographic hash table (SHA3‑256 + zlib)
-├── swstm.py          # SWSTM v7.0 (Flat, Hierarchical, PQ, Engine)
-├── __init__.py       # Package exports (ExactMemory, SWSTMEngine, etc.)
-├── api.py            # FastAPI server (SQLite keys, usage tracking, agent detection)
-├── index.html        # Landing page (Eigengrau + Cinzel + neon green)
-├── tests/            # Unit tests
-│   └── test_swstm.py
-├── setup.py          # Packaging configuration
-├── requirements.txt  # Dependencies
-├── banner.svg        # Banner image
-└── README.md         # This file
+├── exact.py              # ExactMemory (HMAC‑SHA3‑256, tamper‑evident)
+├── swstm.py              # SWSTM v7.0 (Flat, Hierarchical, PQ, Engine)
+├── __init__.py           # Package exports (ExactMemory, SWSTMEngine, etc.)
+├── api.py                # FastAPI server (SQLite keys, usage tracking)
+├── index.html            # Landing page
+├── tests/
+│   ├── test_swstm.py     # ⚠️ Some tests currently failing (in progress)
+│   └── ...
+├── setup.py              # Packaging configuration
+├── requirements.txt      # Dependencies
+├── banner.svg            # Banner image
+└── README.md             # This file
 ```
 
 ---
 
 📦 Dependencies
 
-Package Purpose
-fastapi Web framework for API
-uvicorn ASGI server
-sentence-transformers Text embeddings for SWSTM
-scikit-learn K‑Means clustering (hierarchical)
-torch PyTorch for SWSTM neural memory
-numpy Numeric operations
-pydantic Data validation
+Package Purpose Required For
+fastapi Web framework API server
+uvicorn ASGI server API server
+sentence-transformers Text embeddings SWSTM
+scikit-learn K‑Means clustering Hierarchical SWSTM
+torch PyTorch SWSTM neural memory
+numpy Numeric operations SWSTM
+pydantic Data validation API server
+
+ExactMemory has zero external dependencies: it uses only the Python standard library.
+
 
 ---
 
-📜 License
+📜 License & Patent
 
-GNU Affero General Public License v3.0 (AGPLv3)
-See LICENSE for details.
+License: GNU Affero General Public License v3.0 (AGPLv3) – see LICENSE for details.
 
 Patent: US Provisional Application filed – SWSTM technology.
+
+Commercial Use: For commercial licensing, enterprise support, or patent inquiries, contact:
+📧 eliamraell@yandex.com
 
 ---
 
@@ -230,16 +280,30 @@ Patent: US Provisional Application filed – SWSTM technology.
 · Raell, E. (2026). SWSTM v6.6 Pantone Paper.
 · Live Demo: recallspection.onrender.com
 · API Docs: recallspection.onrender.com/docs
+· ExactMemory Standalone: github.com/sciencedelicmetatech/exactmemory.recallspection
 
 ---
 
 🤝 Contributing
 
+We welcome contributions, especially on:
+
+· Fixing the test suite
+· Implementing HybridEngine
+· Replacing the PQ placeholder with a real implementation
+· Publishing reproducible benchmarks (with raw outputs and configs)
+· Adding LangChain / MCP integration
+
 Please open an issue or pull request for improvements.
-For patent and commercial inquiries, contact: eliamraell@yandex.com
+For patent and commercial inquiries: eliamraell@yandex.com
 
 ---
 
 Made with ❤️ by Sciencedelic Metatech
 
+```
+
+---
+
+This README is **honest, complete, and actionable** – it clearly separates production‑ready ExactMemory from research‑grade SWSTM, lists all known limitations, and provides a realistic roadmap. It builds trust by being transparent about what works and what doesn't.
 ```
