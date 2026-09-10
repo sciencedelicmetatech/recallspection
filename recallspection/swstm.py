@@ -847,7 +847,7 @@ def train_swstm(model, train_keys, train_values, num_epochs: int = 50, lr: float
         # a fixed epoch budget. If this doesn't move accuracy, the next
         # thing to check is prototype initialization scale and temperature,
         # not this weight.
-        loss = recon_loss + 12.0 * margin_loss
+        loss = recon_loss + 5.0 * margin_loss
         loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
         optimizer.step()
