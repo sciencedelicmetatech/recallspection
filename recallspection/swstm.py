@@ -753,12 +753,6 @@ class HybridEngine:
         """swstm_kwargs forwards directly to SWSTMEngine, e.g.
         HybridEngine(num_slots=500, key_dim=384, slot_dim=384) matches
         the real test contract in tests/test_swstm.py."""
-        if ExactMemory is None:
-            raise RuntimeError(
-                "ExactMemory could not be imported (see the try/except at the "
-                "top of this file). Install 'exactmemory-recallspection' or "
-                "ensure exact.py is importable before constructing HybridEngine."
-            )
         self.exact = exact_memory if exact_memory is not None else ExactMemory()
         self.swstm = swstm_engine if swstm_engine is not None else SWSTMEngine(**swstm_kwargs)
 
@@ -853,7 +847,7 @@ def train_swstm(model, train_keys, train_values, num_epochs: int = 50, lr: float
         # a fixed epoch budget. If this doesn't move accuracy, the next
         # thing to check is prototype initialization scale and temperature,
         # not this weight.
-        loss = recon_loss + 5.0 * margin_loss
+        loss = recon_loss + 12.0 * margin_loss
         loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
         optimizer.step()
