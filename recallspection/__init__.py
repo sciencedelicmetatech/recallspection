@@ -1,8 +1,9 @@
+# recallspection/__init__.py
 """
-Recallspection – Dual-core exact memory for AI agents.
+Recallspection – Dual‑core exact memory for AI agents.
 """
 
-__version__ = "18.0.1"
+__version__ = "18.0.0"
 
 from .exact import ExactMemory
 from .swstm import SWSTMEngine, HybridEngine
