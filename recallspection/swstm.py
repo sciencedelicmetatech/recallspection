@@ -67,11 +67,11 @@ logger = logging.getLogger("recallspection.swstm")
 try:
     from exactmemory_recallspection import ExactMemory
 except ImportError:
-    try:
-        from .exact import ExactMemory
-    except ImportError:
-        ExactMemory = None
-        logger.warning("ExactMemory not available. Install 'exactmemory-recallspection'.")
+    # Don't silently swallow a real bug in local exact.py behind a second
+    # bare except -- if the external package isn't installed, import
+    # directly from .exact and let any actual error surface with a real
+    # traceback instead of silently becoming `ExactMemory = None`.
+    from .exact import ExactMemory
 
 # Optional sentence-transformers for high-level engine
 try:
@@ -808,13 +808,30 @@ def train_swstm(model, train_keys, train_values, num_epochs: int = 50, lr: float
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=num_epochs)
 
+    def _reset_memory(m):
+        # FIX: memory was accumulated via add_() every epoch with no reset.
+        # As prototypes shift during training, stale routing assignments
+        # from earlier epochs stayed baked into the memory buffer,
+        # corrupting the final readout (confirmed: real run gave 36-41%
+        # accuracy instead of the expected ~99%+ on 100 facts / 2000 slots).
+        # Reset before each write so memory reflects only the CURRENT
+        # epoch's routing, not a blend of every routing assignment the
+        # prototypes have ever passed through.
+        targets = m.experts if hasattr(m, "experts") else [m]
+        for t in targets:
+            t.memory.zero_()
+            t.slot_counter.zero_()
+            t.occupied.fill_(False)
+
     loss_history, exact_history = [], []
+    _reset_memory(model)
     model(train_keys, train_values, op="write")
 
     for epoch in range(num_epochs):
         model.train()
         optimizer.zero_grad()
 
+        _reset_memory(model)
         model(train_keys, train_values, op="write")
         read_values = model(train_keys, op="read")
         recon_loss = F.mse_loss(read_values, train_values)
@@ -829,7 +846,14 @@ def train_swstm(model, train_keys, train_values, num_epochs: int = 50, lr: float
         else:
             margin_loss = torch.tensor(0.0, device=device)
 
-        loss = recon_loss + margin_loss
+        # UNVERIFIED (no torch available to confirm): weighting margin_loss
+        # up relative to recon_loss, since near-identical key strings
+        # (e.g. "fact_0".."fact_99") likely embed close together and need
+        # stronger separation pressure to route to distinct slots within
+        # a fixed epoch budget. If this doesn't move accuracy, the next
+        # thing to check is prototype initialization scale and temperature,
+        # not this weight.
+        loss = recon_loss + 5.0 * margin_loss
         loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
         optimizer.step()
@@ -837,6 +861,8 @@ def train_swstm(model, train_keys, train_values, num_epochs: int = 50, lr: float
 
         model.eval()
         with torch.no_grad():
+            _reset_memory(model)
+            model(train_keys, train_values, op="write")
             read_exact = model.read_exact(train_keys)
             exact_match = (torch.argmax(read_exact, dim=-1) == torch.argmax(train_values, dim=-1)).float().mean()
 
@@ -845,6 +871,11 @@ def train_swstm(model, train_keys, train_values, num_epochs: int = 50, lr: float
 
         if verbose and ((epoch + 1) % 10 == 0 or epoch == 0):
             print(f"Epoch {epoch+1:3d}/{num_epochs} | Loss: {loss.item():.4f} | Exact: {exact_match.item()*100:.1f}%")
+
+    # Leave memory in its final, correct state (matching the last epoch's
+    # trained prototypes) for any subsequent read/get() calls.
+    _reset_memory(model)
+    model(train_keys, train_values, op="write")
 
     return loss_history, exact_history
 
