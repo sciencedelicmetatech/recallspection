@@ -14,8 +14,10 @@ class ExactMemory:
     def _hash_key(self, key: str) -> str:
         return hashlib.sha256(f"{self._secret}:{key}".encode()).hexdigest()
 
-    def _pack(self, value: Any) -> str:
-        return str(value)
+    def _pack(self, value: Any) -> Any:
+        # Store the original value so tests can compare real Python objects.
+        # Production persistence/serialization should happen separately.
+        return value
 
     def add(self, key: str, value: Any) -> None:
         key_str = str(key)
@@ -24,7 +26,7 @@ class ExactMemory:
         if not existed:
             self._fact_count += 1
 
-    def get(self, key: str) -> Optional[str]:
+    def get(self, key: str) -> Optional[Any]:
         return self._storage.get(self._hash_key(str(key)))
 
     def __contains__(self, key: str) -> bool:
@@ -36,7 +38,6 @@ class ExactMemory:
     @property
     def fact_count(self) -> int:
         return self._fact_count
-
 
 # --- SWSTM Neural Model ---
 class SWSTMModel(nn.Module):
