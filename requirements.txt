@@ -3,5 +3,5 @@ uvicorn
 pydantic
 torch
 sentence-transformers
-exactmemory-recallspection>=3.0.0
+https://github.com/sciencedelicmetatech/exactmemory.recallspection
 
