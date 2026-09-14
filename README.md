@@ -19,23 +19,6 @@
 
 ---
 
-## What is Recallspection?
-
-**Recallspection** is a dual-engine memory system for autonomous AI agents.
-
-It combines:
-
-1. **ExactMemory v3** — a tamper-evident, replay-resistant, rollback-resistant exact memory ledger.
-2. **SWSTM Legendary** — a collision-resistant neural associative memory engine for fuzzy retrieval and agent-scale semantic memory.
-
-Together, they form a secure memory layer for agents that need to remember facts reliably, retrieve associated information flexibly, and detect tampering or rollback attempts.
-
-> **Important positioning:**  
-> Recallspection is not a general cure for LLM hallucination.  
-> It is a memory infrastructure layer that provides deterministic recall for stored facts, tamper evidence for persisted records, and reduced overwrite-based forgetting in neural slot memory.
-
----
-
 ## Core Architecture
 
 ```text
@@ -57,41 +40,6 @@ Together, they form a secure memory layer for agents that need to remember facts
 │ Tombstones                │             │ Save/load roundtrip       │
 │ Remote anchor support     │             │ Hybrid exact-first search │
 └───────────────────────────┘             └───────────────────────────┘
-pip install exactmemory-recallspection
-
-Below is the **full README for the main repo**: `sciencedelicmetatech/recallspection`.
-
-Important banner rule:
-
-> Keep the main repo banner unique. Do **not** reuse the ExactMemory repo banner.  
-> The README below assumes your main repo banner file is `banner.svg`.  
-> If your main banner has a different filename, only change this line:
->
-> ```md
-> ![Recallspection Banner](banner.svg)
-> ```
-
----
-
-## Recommended `README.md` for Main Repo
-
-```md
-![Recallspection Banner](banner.svg)
-
-<div align="center">
-
-# Recallspection
-
-**Tamper-evident exact memory + collision-resistant neural associative memory for AI agents.**
-
-[![CI](https://github.com/sciencedelicmetatech/recallspection/actions/workflows/ci.yml/badge.svg)](https://github.com/sciencedelicmetatech/recallspection/actions/workflows/ci.yml)
-![Python](https://img.shields.io/badge/Python-3.10%2B-blue)
-![FastAPI](https://img.shields.io/badge/FastAPI-0.100%2B-009688)
-![PyTorch](https://img.shields.io/badge/PyTorch-2.x-EE4C2C)
-![ExactMemory](https://img.shields.io/badge/ExactMemory-v3.0%2B-8A2BE2)
-![Status](https://img.shields.io/badge/status-production--hardening-orange)
-
-</div>
 
 ---
 
