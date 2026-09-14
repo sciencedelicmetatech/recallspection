@@ -29,6 +29,17 @@ class ExactMemory:
     def get(self, key: str) -> Optional[Any]:
         return self._storage.get(self._hash_key(str(key)))
 
+    def delete(self, key: str) -> bool:
+        key_str = str(key)
+        hashed_key = self._hash_key(key_str)
+
+        if hashed_key in self._storage:
+            del self._storage[hashed_key]
+            self._fact_count -= 1
+            return True
+
+        return False
+
     def __contains__(self, key: str) -> bool:
         return self._hash_key(str(key)) in self._storage
 
@@ -38,6 +49,7 @@ class ExactMemory:
     @property
     def fact_count(self) -> int:
         return self._fact_count
+
 
 # --- SWSTM Neural Model ---
 class SWSTMModel(nn.Module):
