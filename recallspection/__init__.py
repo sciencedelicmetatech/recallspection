@@ -4,13 +4,17 @@ Recallspection – Dual-core exact memory for AI agents.
 
 __version__ = "18.0.0"
 
-from .exact import ExactMemory, TamperDetectedError
-from .swstm import SWSTMEngine, SWSTMCore, HybridEngine
+from .swstm import (
+    ExactMemory,
+    HybridEngine,
+    SWSTMEngine,
+    SWSTMCore,
+)
 
 __all__ = [
     "ExactMemory",
-    "TamperDetectedError",
+    "HybridEngine",
     "SWSTMEngine",
     "SWSTMCore",
-    "HybridEngine",
 ]
+
