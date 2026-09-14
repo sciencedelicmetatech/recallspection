@@ -210,5 +210,4 @@ Secure memory infrastructure for autonomous AI agents.
 Part of the Sciencedelic Metatech research ecosystem.
 
 </div>
-```
 
