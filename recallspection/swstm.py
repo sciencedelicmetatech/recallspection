@@ -379,3 +379,11 @@ class HybridEngine:
         
     def load(self, path: str):
         self.swstm.load(path)
+        
+        # ------------------------------------------------------------------
+# Backward compatibility aliases
+# ------------------------------------------------------------------
+
+# Legacy name expected by recallspection/__init__.py and possibly api.py
+SWSTMCore = SWSTMEngine
+
