@@ -4,7 +4,7 @@ import logging
 import sqlite3
 import secrets
 import hmac
-import base64
+import hashlib
 from contextlib import asynccontextmanager
 from typing import List, Optional, Dict, Any
 
@@ -12,7 +12,7 @@ from fastapi import FastAPI, HTTPException, Header, Depends, Request
 from fastapi.security import APIKeyHeader
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 import uvicorn
 
 # -----------------------------------------------------------------------------
@@ -30,6 +30,9 @@ ADMIN_KEY_ENV = "RECALLSPECTION_ADMIN_KEY"
 SIGNUP_SECRET_ENV = "RECALLSPECTION_SIGNUP_SECRET"
 EXACT_SECRET_ENV = "RECALLSPECTION_EXACT_SECRET"
 
+AUTO_SAVE_INTERVAL = int(os.getenv("AUTO_SAVE_INTERVAL", "100"))
+write_counter = 0
+
 # -----------------------------------------------------------------------------
 # 2. Database: API Keys & Usage Tracking
 # -----------------------------------------------------------------------------
@@ -46,7 +49,7 @@ def init_db():
             owner TEXT NOT NULL,
             plan TEXT NOT NULL,
             usage INTEGER DEFAULT 0,
-            limit INTEGER DEFAULT 1000,
+            `limit` INTEGER DEFAULT 1000,
             created_at TEXT DEFAULT CURRENT_TIMESTAMP,
             last_used TEXT,
             is_active INTEGER DEFAULT 1
@@ -59,18 +62,14 @@ def init_db():
 def create_api_key(owner: str, plan: str = "free") -> str:
     key = f"rk_{secrets.token_urlsafe(24)}"
     limit_map = {
-        "free": 1000,
-        "pro": 100000,
-        "enterprise": 1000000,
-        "agent_free": 5000,
-        "agent_pro": 500000,
-        "agent_enterprise": 5000000,
+        "free": 1000, "pro": 100000, "enterprise": 1000000,
+        "agent_free": 5000, "agent_pro": 500000, "agent_enterprise": 5000000,
     }
     limit = limit_map.get(plan, 1000)
     
     conn = get_db()
     conn.execute(
-        "INSERT INTO api_keys (key_id, owner, plan, limit) VALUES (?, ?, ?, ?)",
+        "INSERT INTO api_keys (key_id, owner, plan, `limit`) VALUES (?, ?, ?, ?)",
         (key, owner, plan, limit)
     )
     conn.commit()
@@ -80,8 +79,7 @@ def create_api_key(owner: str, plan: str = "free") -> str:
 def get_key_info(key: str) -> Optional[Dict[str, Any]]:
     conn = get_db()
     row = conn.execute(
-        "SELECT * FROM api_keys WHERE key_id = ? AND is_active = 1",
-        (key,)
+        "SELECT * FROM api_keys WHERE key_id = ? AND is_active = 1", (key,)
     ).fetchone()
     conn.close()
     return dict(row) if row else None
@@ -89,21 +87,18 @@ def get_key_info(key: str) -> Optional[Dict[str, Any]]:
 def increment_usage(key: str) -> int:
     conn = get_db()
     conn.execute(
-        "UPDATE api_keys SET usage = usage + 1, last_used = CURRENT_TIMESTAMP WHERE key_id = ?",
-        (key,)
+        "UPDATE api_keys SET usage = usage + 1, last_used = CURRENT_TIMESTAMP WHERE key_id = ?", (key,)
     )
     conn.commit()
-    row = conn.execute("SELECT usage, limit FROM api_keys WHERE key_id = ?", (key,)).fetchone()
+    row = conn.execute("SELECT usage, `limit` FROM api_keys WHERE key_id = ?", (key,)).fetchone()
     conn.close()
     return row[0] if row else 0
 
 def get_remaining_usage(key: str) -> int:
     conn = get_db()
-    row = conn.execute("SELECT limit, usage FROM api_keys WHERE key_id = ?", (key,)).fetchone()
+    row = conn.execute("SELECT `limit`, usage FROM api_keys WHERE key_id = ?", (key,)).fetchone()
     conn.close()
-    if row:
-        return row[0] - row[1]
-    return 0
+    return (row[0] - row[1]) if row else 0
 
 # -----------------------------------------------------------------------------
 # 3. Memory Engine Initialization & Persistence
@@ -116,7 +111,8 @@ def get_exact_secret() -> bytes:
     if not raw:
         logger.warning(f"{EXACT_SECRET_ENV} not set. Generating ephemeral key. Persistence will break on restart.")
         return os.urandom(32)
-    return base64.urlsafe_b64decode(raw.encode())
+    # Safely derive a 32-byte key from any string format
+    return hashlib.sha256(raw.encode()).digest()
 
 def get_exact_memory():
     global exact
@@ -130,8 +126,7 @@ def get_swstm():
     global swstm
     if swstm is None:
         from recallspection.swstm import SWSTMEngine
-        # Legendary SWSTM accepts mode and flat_num_slots for API compatibility
-        swstm = SWSTMEngine(mode=SWSTM_MODE, flat_num_slots=200)
+        swstm = SWSTMEngine(mode=SWSTM_MODE, flat_num_slots=2000) # Upped to 2000 for production
         logger.info(f"SWSTMEngine initialized (mode={SWSTM_MODE})")
     return swstm
 
@@ -139,12 +134,16 @@ def save_memory():
     try:
         if exact is not None:
             data = {"exact": exact.export_state()}
-            with open(MEMORY_FILE, 'w') as f:
+            tmp_mem = MEMORY_FILE + ".tmp"
+            with open(tmp_mem, 'w') as f:
                 json.dump(data, f)
+            os.replace(tmp_mem, MEMORY_FILE)
             logger.info(f"ExactMemory saved to {MEMORY_FILE}")
             
         if swstm is not None:
-            swstm.save(SWSTM_FILE)
+            tmp_swstm = SWSTM_FILE + ".tmp"
+            swstm.save(tmp_swstm)
+            os.replace(tmp_swstm, SWSTM_FILE)
             logger.info(f"SWSTM saved to {SWSTM_FILE}")
             
     except Exception as e:
@@ -175,8 +174,8 @@ def load_memory():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
-    get_exact_memory() # Pre-initialize
-    get_swstm()        # Pre-initialize
+    get_exact_memory() 
+    get_swstm()        
     load_memory()
     logger.info("Recallspection API started")
     yield
@@ -186,7 +185,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Recallspection API",
     description="Legendary Dual-core exact memory with API keys, usage tracking, and agent detection",
-    version="18.1.0",
+    version="18.1.0-legendary",
     lifespan=lifespan,
 )
 
@@ -202,17 +201,10 @@ def is_agent_request(request: Request) -> bool:
         "openai", "anthropic", "cohere", "mistral", "transformers",
         "pytorch", "tensorflow", "jupyter", "colab", "bot", "spider"
     ]
-    for pattern in agent_patterns:
-        if pattern in user_agent:
-            return True
-            
-    referer = request.headers.get("referer", "").lower()
-    if "colab" in referer or "notebook" in referer:
-        return True
-        
-    return False
+    return any(pattern in user_agent for pattern in agent_patterns)
 
-async def validate_api_key(request: Request, api_key: str = Depends(api_key_header)):
+# CHANGED: Sync dependency to prevent event loop blocking on SQLite I/O
+def validate_api_key(request: Request, api_key: str = Depends(api_key_header)):
     if api_key is None:
         raise HTTPException(status_code=401, detail="Missing API Key. Please provide X-API-Key header.")
         
@@ -243,11 +235,11 @@ def require_admin(admin_key: str = Header(None, alias="X-Admin-Key")):
     return {"admin": True}
 
 # -----------------------------------------------------------------------------
-# 6. Pydantic Models
+# 6. Pydantic Models (Added Payload Limits)
 # -----------------------------------------------------------------------------
 class AddRequest(BaseModel):
-    key: str
-    value: str
+    key: str = Field(..., max_length=2048, description="Max 2KB key")
+    value: str = Field(..., max_length=65536, description="Max 64KB value")
 
 class AddResponse(BaseModel):
     status: str
@@ -279,23 +271,23 @@ class UsageResponse(BaseModel):
 # 7. Public Routes & Static Files
 # -----------------------------------------------------------------------------
 @app.get("/", response_class=HTMLResponse)
-async def root():
+def root():
     try:
         with open("index.html", "r") as f:
             return f.read()
     except FileNotFoundError:
         return {"message": "Recallspection API is running. Legend mode active."}
 
-# Mount static files AFTER routes so it doesn't block API endpoints
 app.mount("/static", StaticFiles(directory=".", html=True), name="static")
 
 @app.get("/health")
-async def health():
+def health():
     exact_mem = get_exact_memory() if exact is not None else None
     swstm_mem = get_swstm() if swstm is not None else None
     
     return {
         "status": "healthy",
+        "version": "18.1.0-legendary",
         "backend": "SWSTM Legendary + ExactMemory",
         "swstm_loaded": swstm_mem is not None,
         "exact_loaded": exact_mem is not None,
@@ -305,8 +297,8 @@ async def health():
     }
 
 @app.post("/signup")
-async def signup(
-    owner: str, 
+def signup(
+    owner: str = Field(..., max_length=256), 
     plan: str = "free", 
     signup_secret: str = Header(None, alias="X-Signup-Secret")
 ):
@@ -331,11 +323,10 @@ async def signup(
     )
 
 # -----------------------------------------------------------------------------
-# 8. Protected Memory Routes
+# 8. Protected Memory Routes (CHANGED: `def` instead of `async def` to prevent blocking)
 # -----------------------------------------------------------------------------
 @app.get("/usage")
-async def usage(key_info: dict = Depends(validate_api_key)):
-    # FIXED: Removed illegal "await api_key"
+def usage(key_info: dict = Depends(validate_api_key)):
     return UsageResponse(
         owner=key_info["owner"],
         plan=key_info["plan"],
@@ -345,40 +336,41 @@ async def usage(key_info: dict = Depends(validate_api_key)):
     )
 
 @app.post("/add", response_model=AddResponse)
-async def add_fact(
+def add_fact(
     request: Request,
     add_req: AddRequest,
     backend: str = "swstm",
     key_info: dict = Depends(validate_api_key),
 ):
+    global write_counter
     try:
         remaining = get_remaining_usage(key_info["key_id"])
         
         if backend == "exact":
             mem = get_exact_memory()
             mem.add(add_req.key, add_req.value)
-            return AddResponse(
-                status="ok",
-                message="Added to ExactMemory",
-                backend="exact",
-                remaining=remaining,
-            )
+            msg = "Added to ExactMemory"
+            b_end = "exact"
         else:
             mem = get_swstm()
             slot_idx = mem.add(add_req.key, add_req.value)
-            return AddResponse(
-                status="ok",
-                message=f"Added to SWSTM slot {slot_idx}",
-                backend="swstm",
-                remaining=remaining,
-            )
+            msg = f"Added to SWSTM slot {slot_idx}"
+            b_end = "swstm"
+            
+        # Auto-save mechanism
+        write_counter += 1
+        if write_counter >= AUTO_SAVE_INTERVAL:
+            save_memory()
+            write_counter = 0
+            
+        return AddResponse(status="ok", message=msg, backend=b_end, remaining=remaining)
             
     except Exception as e:
         logger.exception("Error in /add")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error during memory write.")
 
 @app.get("/get", response_model=GetResponse)
-async def get_fact(
+def get_fact(
     request: Request,
     key: str,
     top_k: int = 1,
@@ -391,7 +383,6 @@ async def get_fact(
         if backend == "exact":
             from recallspection.exact import TamperDetectedError
             mem = get_exact_memory()
-            
             try:
                 result = mem.get(key, raise_on_tamper=True)
             except TamperDetectedError:
@@ -404,31 +395,37 @@ async def get_fact(
         else:
             mem = get_swstm()
             results = mem.get(key, top_k=top_k)
-            
             if results:
                 return GetResponse(answers=results, backend="swstm", remaining=remaining)
             return GetResponse(answers=[], backend="swstm", remaining=remaining, message="No match")
             
     except Exception as e:
         logger.exception("Error in /get")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error during memory retrieval.")
 
 # -----------------------------------------------------------------------------
-# 9. Exact Memory Dedicated Routes (FIXED NAME COLLISION)
+# 9. Exact Memory Dedicated Routes
 # -----------------------------------------------------------------------------
 @app.post("/exact/add")
-async def add_exact_endpoint(
+def add_exact_endpoint(
     request: Request,
     add_req: AddRequest,
     key_info: dict = Depends(validate_api_key),
 ):
+    global write_counter
     mem = get_exact_memory()
     mem.add(add_req.key, add_req.value)
     remaining = get_remaining_usage(key_info["key_id"])
+    
+    write_counter += 1
+    if write_counter >= AUTO_SAVE_INTERVAL:
+        save_memory()
+        write_counter = 0
+        
     return {"status": "ok", "remaining": remaining}
 
 @app.get("/exact/get")
-async def get_exact_endpoint(
+def get_exact_endpoint(
     request: Request,
     key: str,
     key_info: dict = Depends(validate_api_key),
@@ -444,11 +441,10 @@ async def get_exact_endpoint(
         
     if result is not None:
         return {"answer": result, "remaining": remaining}
-        
     return {"answer": None, "remaining": remaining, "message": "Not found"}
 
 @app.get("/agent-info")
-async def agent_info(request: Request, key_info: dict = Depends(validate_api_key)):
+def agent_info(request: Request, key_info: dict = Depends(validate_api_key)):
     is_agent = request.state.is_agent
     return {
         "is_agent": is_agent,
@@ -458,22 +454,34 @@ async def agent_info(request: Request, key_info: dict = Depends(validate_api_key
     }
 
 # -----------------------------------------------------------------------------
-# 10. Admin Routes (FIXED SECURITY)
+# 10. Admin Routes
 # -----------------------------------------------------------------------------
 @app.get("/admin/keys")
-async def list_keys(admin: dict = Depends(require_admin)):
+def list_keys(admin: dict = Depends(require_admin)):
     conn = get_db()
-    rows = conn.execute("SELECT key_id, owner, plan, usage, limit, created_at, last_used, is_active FROM api_keys").fetchall()
+    rows = conn.execute("SELECT key_id, owner, plan, usage, `limit`, created_at, last_used, is_active FROM api_keys").fetchall()
     conn.close()
     return [dict(row) for row in rows]
 
 @app.post("/admin/revoke/{key_id}")
-async def revoke_key(key_id: str, admin: dict = Depends(require_admin)):
+def revoke_key(key_id: str, admin: dict = Depends(require_admin)):
     conn = get_db()
     conn.execute("UPDATE api_keys SET is_active = 0 WHERE key_id = ?", (key_id,))
     conn.commit()
     conn.close()
     return {"status": "ok", "message": f"Key {key_id} revoked"}
+
+@app.post("/admin/save")
+def admin_save(admin: dict = Depends(require_admin)):
+    save_memory()
+    return {"status": "ok", "message": "Memory manually flushed to disk."}
+
+@app.post("/admin/consolidate")
+def admin_consolidate(admin: dict = Depends(require_admin)):
+    mem = get_swstm()
+    mem.consolidate()
+    save_memory()
+    return {"status": "ok", "message": "SWSTM consolidated and saved."}
 
 # -----------------------------------------------------------------------------
 # 11. Run
