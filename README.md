@@ -60,52 +60,6 @@ Together, they form a secure memory layer for agents that need to remember facts
 
 ---
 
-## Core Architecture
-
-```text
-                    ┌──────────────────────────────┐
-                    │        Recallspection        │
-                    └──────────────┬───────────────┘
-                                   │
-              ┌────────────────────┴────────────────────┐
-              │                                         │
-┌─────────────▼─────────────┐             ┌─────────────▼─────────────┐
-│        ExactMemory        │             │      SWSTM Legendary      │
-├───────────────────────────┤             ├───────────────────────────┤
-│ Exact key recall          │             │ Fuzzy / semantic recall   │
-│ HMAC-SHA256 integrity     │             │ Slot buckets              │
-│ Replay resistance         │             │ Exact key resolution      │
-│ Rollback resistance       │             │ Sticky self-token         │
-│ Transparency log          │             │ Consolidation / sleep     │
-│ Container MAC             │             │ Encoder injection         │
-│ Tombstones                │             │ Save/load roundtrip       │
-│ Remote anchor support     │             │ Hybrid exact-first search │
-└───────────────────────────┘             └───────────────────────────┘
-```
-
----
-
-## Why Recallspection?
-
-Most AI memory systems fail in one of three ways:
-
-1. **They forget silently.**  
-   A vector store overwrites or loses memories under collision pressure.
-
-2. **They retrieve approximately when exactness is required.**  
-   Some agent tasks need deterministic recall, not nearest-neighbor guessing.
-
-3. **They cannot prove whether a memory was modified.**  
-   A database may return data, but not prove that the data is still authentic.
-
-Recallspection addresses these issues by separating memory responsibilities:
-
-- **ExactMemory** handles authoritative, auditable, tamper-evident facts.
-- **SWSTM Legendary** handles associative, fuzzy, neural-style retrieval.
-- **Hybrid retrieval** prefers exact memory first, then falls back to neural memory.
-
----
-
 ## Features
 
 ### ExactMemory Integration
