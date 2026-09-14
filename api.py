@@ -101,43 +101,54 @@ def get_remaining_usage(key: str) -> int:
     return (row[0] - row[1]) if row else 0
 
 # -----------------------------------------------------------------------------
-# 3. Memory Engine Initialization & Persistence
+# 3. Memory Engine Initialization & Persistence (v3.0.0 Integration)
 # -----------------------------------------------------------------------------
 swstm = None
 exact = None
+EXACT_LOG_FILE = os.getenv("RECALLSPECTION_EXACT_LOG", "transparency.log")
 
-def get_exact_secret() -> bytes:
+def get_exact_keys() -> Dict[str, bytes]:
+    """Derives the required key dictionary from a single environment secret."""
     raw = os.getenv(EXACT_SECRET_ENV)
     if not raw:
-        logger.warning(f"{EXACT_SECRET_ENV} not set. Generating ephemeral key. Persistence will break on restart.")
-        return os.urandom(32)
-    # Safely derive a 32-byte key from any string format
-    return hashlib.sha256(raw.encode()).digest()
+        logger.warning(f"{EXACT_SECRET_ENV} not set. Using ephemeral keys. Persistence will break on restart.")
+        raw = secrets.token_hex(32)
+    
+    # Deterministically derive the agent key and container key from the master secret
+    base = hashlib.sha256(raw.encode()).digest()
+    return {
+        'agent_key': base,
+        'container': hashlib.sha256(b"container-salt-" + base).digest()
+    }
 
 def get_exact_memory():
     global exact
     if exact is None:
-        from recallspection.exact import ExactMemory
-        exact = ExactMemory(secret_key=get_exact_secret())
-        logger.info("ExactMemory initialized")
+        # Import from the standalone package
+        from exactmemory import ExactMemory 
+        
+        keys = get_exact_keys()
+        exact = ExactMemory(
+            keys=keys, 
+            container_key_id='container',
+            require_log=True, 
+            log_path=EXACT_LOG_FILE
+        )
+        logger.info("ExactMemory v3.0.0 initialized with transparency log")
     return exact
 
 def get_swstm():
     global swstm
     if swstm is None:
         from recallspection.swstm import SWSTMEngine
-        swstm = SWSTMEngine(mode=SWSTM_MODE, flat_num_slots=2000) # Upped to 2000 for production
+        swstm = SWSTMEngine(mode=SWSTM_MODE, flat_num_slots=2000)
         logger.info(f"SWSTMEngine initialized (mode={SWSTM_MODE})")
     return swstm
 
 def save_memory():
     try:
         if exact is not None:
-            data = {"exact": exact.export_state()}
-            tmp_mem = MEMORY_FILE + ".tmp"
-            with open(tmp_mem, 'w') as f:
-                json.dump(data, f)
-            os.replace(tmp_mem, MEMORY_FILE)
+            exact.save(MEMORY_FILE) # v3.0.0 handles atomic writes and logging internally
             logger.info(f"ExactMemory saved to {MEMORY_FILE}")
             
         if swstm is not None:
@@ -153,12 +164,10 @@ def load_memory():
     global exact, swstm
     try:
         if os.path.exists(MEMORY_FILE):
-            with open(MEMORY_FILE, 'r') as f:
-                data = json.load(f)
-            if 'exact' in data:
-                mem = get_exact_memory()
-                mem.load_state(data['exact'])
-                logger.info(f"Loaded ExactMemory with {len(mem)} facts.")
+            mem = get_exact_memory()
+            keys = get_exact_keys()
+            mem.load(MEMORY_FILE, keys) # v3.0.0 verifies MAC, log chain, and rollbacks
+            logger.info(f"Loaded ExactMemory with {len(mem)} active facts.")
                 
         if os.path.exists(SWSTM_FILE):
             mem = get_swstm()
@@ -166,7 +175,7 @@ def load_memory():
             logger.info(f"Loaded SWSTM with {mem.fact_count} facts.")
             
     except Exception as e:
-        logger.error(f"Failed to load memory: {e}")
+        logger.critical(f"Failed to load memory (Possible Tampering/Rollback): {e}")
 
 # -----------------------------------------------------------------------------
 # 4. FastAPI App Lifecycle
@@ -203,7 +212,6 @@ def is_agent_request(request: Request) -> bool:
     ]
     return any(pattern in user_agent for pattern in agent_patterns)
 
-# CHANGED: Sync dependency to prevent event loop blocking on SQLite I/O
 def validate_api_key(request: Request, api_key: str = Depends(api_key_header)):
     if api_key is None:
         raise HTTPException(status_code=401, detail="Missing API Key. Please provide X-API-Key header.")
@@ -235,7 +243,7 @@ def require_admin(admin_key: str = Header(None, alias="X-Admin-Key")):
     return {"admin": True}
 
 # -----------------------------------------------------------------------------
-# 6. Pydantic Models (Added Payload Limits)
+# 6. Pydantic Models
 # -----------------------------------------------------------------------------
 class AddRequest(BaseModel):
     key: str = Field(..., max_length=2048, description="Max 2KB key")
@@ -323,7 +331,7 @@ def signup(
     )
 
 # -----------------------------------------------------------------------------
-# 8. Protected Memory Routes (CHANGED: `def` instead of `async def` to prevent blocking)
+# 8. Protected Memory Routes
 # -----------------------------------------------------------------------------
 @app.get("/usage")
 def usage(key_info: dict = Depends(validate_api_key)):
@@ -347,9 +355,13 @@ def add_fact(
         remaining = get_remaining_usage(key_info["key_id"])
         
         if backend == "exact":
+            from exactmemory import TamperError
             mem = get_exact_memory()
-            mem.add(add_req.key, add_req.value)
-            msg = "Added to ExactMemory"
+            try:
+                mem.put(add_req.key, add_req.value, key_id='agent_key')
+            except TamperError:
+                 raise HTTPException(status_code=409, detail="Tamper detected during write.")
+            msg = "Added to ExactMemory (Tamper-Evident)"
             b_end = "exact"
         else:
             mem = get_swstm()
@@ -357,7 +369,6 @@ def add_fact(
             msg = f"Added to SWSTM slot {slot_idx}"
             b_end = "swstm"
             
-        # Auto-save mechanism
         write_counter += 1
         if write_counter >= AUTO_SAVE_INTERVAL:
             save_memory()
@@ -381,11 +392,11 @@ def get_fact(
         remaining = get_remaining_usage(key_info["key_id"])
         
         if backend == "exact":
-            from recallspection.exact import TamperDetectedError
+            from exactmemory import TamperError
             mem = get_exact_memory()
             try:
-                result = mem.get(key, raise_on_tamper=True)
-            except TamperDetectedError:
+                result = mem.get(key, raise_on_tampered=True)
+            except TamperError:
                 raise HTTPException(status_code=409, detail="Tamper detected: record integrity compromised.")
                 
             if result is not None:
@@ -413,8 +424,13 @@ def add_exact_endpoint(
     key_info: dict = Depends(validate_api_key),
 ):
     global write_counter
+    from exactmemory import TamperError
     mem = get_exact_memory()
-    mem.add(add_req.key, add_req.value)
+    try:
+        mem.put(add_req.key, add_req.value, key_id='agent_key')
+    except TamperError:
+        raise HTTPException(status_code=409, detail="Tamper detected during write.")
+        
     remaining = get_remaining_usage(key_info["key_id"])
     
     write_counter += 1
@@ -430,13 +446,13 @@ def get_exact_endpoint(
     key: str,
     key_info: dict = Depends(validate_api_key),
 ):
-    from recallspection.exact import TamperDetectedError
+    from exactmemory import TamperError
     mem = get_exact_memory()
     remaining = get_remaining_usage(key_info["key_id"])
     
     try:
-        result = mem.get(key, raise_on_tamper=True)
-    except TamperDetectedError:
+        result = mem.get(key, raise_on_tampered=True)
+    except TamperError:
         raise HTTPException(status_code=409, detail="Tamper detected: record integrity compromised.")
         
     if result is not None:
