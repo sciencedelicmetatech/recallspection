@@ -27,8 +27,11 @@ class ExactMemory:
         except Exception: return None
 
     def add(self, key: Union[str, bytes], value: Any) -> None:
+        # FIX 1: Upsert bug. Don't double count if key already exists
+        existed = key in self
         self._storage[self._hash_key(key)] = self._pack(value)
-        self._fact_count += 1
+        if not existed:
+            self._fact_count += 1
 
     def get(self, key: Union[str, bytes]) -> Optional[Any]:
         packed = self._storage.get(self._hash_key(key))
@@ -60,10 +63,7 @@ class SWSTMCore(nn.Module):
         self.key_dim = key_dim
         self.temperature = temperature
         self.prototype = nn.Parameter(torch.randn(num_slots, key_dim) * 0.02)
-        
-        # [LEGENDARY FEATURE 1] Sticky Tokens: Tracks usage/frequency
         self.self_token = nn.Parameter(torch.zeros(num_slots))
-        
         self.register_buffer("memory", torch.zeros(num_slots, slot_dim))
         self.register_buffer("slot_occupied", torch.zeros(num_slots, dtype=torch.bool))
         self.register_buffer("write_count", torch.zeros(num_slots, dtype=torch.long))
@@ -71,13 +71,11 @@ class SWSTMCore(nn.Module):
     def forward(self, keys: torch.Tensor, values: Optional[torch.Tensor] = None, op: str = "read"):
         keys_norm = F.normalize(keys, dim=-1)
         proto_norm = F.normalize(self.prototype, dim=-1)
-        
         sims = torch.matmul(keys_norm, proto_norm.T) + self.self_token.unsqueeze(0)
         soft_w = F.softmax(sims / self.temperature, dim=-1)
         hard_idx = torch.argmax(soft_w, dim=-1)
         one_hot = F.one_hot(hard_idx, num_classes=self.num_slots).float()
         weights = one_hot.detach() + (soft_w - soft_w.detach())
-        
         if op == "write":
             if values is None: raise ValueError("values required for write")
             delta = torch.einsum("bn,bd->nd", weights, values)
@@ -85,7 +83,6 @@ class SWSTMCore(nn.Module):
             self.slot_occupied[hard_idx] = True
             self.write_count[hard_idx] += 1
             return hard_idx
-            
         return torch.matmul(weights, self.memory)
 
     def read_exact(self, keys: torch.Tensor) -> torch.Tensor:
@@ -114,26 +111,20 @@ class SWSTMCore(nn.Module):
 
     def get_state(self) -> Dict[str, Any]:
         return {
-            "prototype": self.prototype.cpu(),
-            "self_token": self.self_token.cpu(),
-            "memory": self.memory.cpu(),
-            "slot_occupied": self.slot_occupied.cpu(),
-            "write_count": self.write_count.cpu(),
-            "num_slots": self.num_slots,
-            "slot_dim": self.slot_dim,
-            "key_dim": self.key_dim,
-            "temperature": self.temperature,
+            "prototype": self.prototype.cpu(), "self_token": self.self_token.cpu(),
+            "memory": self.memory.cpu(), "slot_occupied": self.slot_occupied.cpu(),
+            "write_count": self.write_count.cpu(), "num_slots": self.num_slots,
+            "slot_dim": self.slot_dim, "key_dim": self.key_dim, "temperature": self.temperature,
         }
 
     def set_state(self, state: Dict[str, Any]):
         self.prototype.data.copy_(state["prototype"].to(self.prototype.device))
-        self.self_token.data.copy_(state["self_token"].to(self.self_token.device))
-        self.memory.copy_(state["memory"].to(self.memory.device))
-        self.slot_occupied.copy_(state["slot_occupied"].to(self.slot_occupied.device))
-        self.write_count.copy_(state["write_count"].to(self.write_count.device))
+        self.self_token.data.copy_(state["self_token"].to(self.prototype.device))
+        self.memory.copy_(state["memory"].to(self.prototype.device))
+        self.slot_occupied.copy_(state["slot_occupied"].to(self.prototype.device))
+        self.write_count.copy_(state["write_count"].to(self.prototype.device))
 
-# --- SWSTM Engine (Legendary Version) ---
-from sentence_transformers import SentenceTransformer
+# --- SWSTM Engine (CI-SAFE Legendary Version) ---
 from pathlib import Path
 
 class SWSTMEngine:
@@ -144,53 +135,79 @@ class SWSTMEngine:
         slot_dim: int = 384,
         temperature: float = 0.01,
         encoder_model: str = "all-MiniLM-L6-v2",
-        device: Optional[torch.device] = None,
+        device: Optional[Union[str, torch.device]] = None,
+        # CI-SAFETY INJECTIONS
+        encoder: Optional[Any] = None,
+        mode: Optional[str] = None,
+        flat_num_slots: Optional[int] = None,
+        hierarchical_num_slots: Optional[int] = None,
+        **_legacy_kwargs: Any
     ):
-        self.device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        if flat_num_slots is not None: num_slots = int(flat_num_slots)
+        elif hierarchical_num_slots is not None: num_slots = int(hierarchical_num_slots)
+            
+        self.mode = mode or "flat"
+        self.encoder_model = encoder_model
+        
+        if device is None: self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        elif isinstance(device, torch.device): self.device = device
+        else: self.device = torch.device(device)
+
         self.key_dim = key_dim
         self.slot_dim = slot_dim
-        self.encoder = SentenceTransformer(encoder_model)
+        
+        # CI-SAFETY: Use injected encoder if provided (DummyEncoder in tests)
+        self.encoder = encoder
+        if self.encoder is None:
+            from sentence_transformers import SentenceTransformer
+            self.encoder = SentenceTransformer(encoder_model)
+            
         self.model = SWSTMCore(
-            num_slots=num_slots,
-            slot_dim=slot_dim,
-            key_dim=key_dim,
-            temperature=temperature,
+            num_slots=num_slots, slot_dim=slot_dim, key_dim=key_dim, temperature=temperature,
         ).to(self.device)
         
-        # [LEGENDARY FEATURE 2] Slot Buckets instead of Dict Overwrites!
         self.slot_to_values: Dict[int, List[Tuple[str, str]]] = defaultdict(list)
-        
         self.value_to_slot: Dict[str, int] = {}
-        # Buffer stores: (key_vec, val_vec, key_str, value_str)
         self._train_buffer: List[tuple] = [] 
         self._prototypes_initialized = False
 
+    @property
+    def fact_count(self) -> int: return len(self._train_buffer)
+    def __len__(self) -> int: return self.fact_count
+
     def _encode(self, text: str) -> torch.Tensor:
         vec = self.encoder.encode(text, convert_to_tensor=True)
+        if not torch.is_tensor(vec): vec = torch.as_tensor(vec)
         if vec.dim() == 1: vec = vec.unsqueeze(0)
         return F.normalize(vec.to(self.device), dim=-1)
 
     def add(self, key: str, value: str) -> int:
-        key_vec = self._encode(key)
-        val_vec = self._encode(value)
+        key_str = str(key)
+        value_str = str(value)
+
+        # FIX 2: UPSERT - Remove old entries for this key before adding
+        self._train_buffer = [(kv, vv, k, v) for kv, vv, k, v in self._train_buffer if k != key_str]
+        for slot_idx in list(self.slot_to_values.keys()):
+            self.slot_to_values[slot_idx] = [(k, v) for k, v in self.slot_to_values[slot_idx] if k != key_str]
+
+        key_vec = self._encode(key_str)
+        val_vec = self._encode(value_str)
         with torch.no_grad():
             slot_idx = self.model.forward(key_vec, val_vec, op="write").item()
             
-        # [LEGENDARY FIX] Append to bucket instead of overwriting!
-        self.slot_to_values[slot_idx].append((key, value))
-        self.value_to_slot[value] = slot_idx
+        self.slot_to_values[slot_idx].append((key_str, value_str))
+        self.value_to_slot[value_str] = slot_idx
         
-        # Buffer stores both vector and string for consolidation
-        self._train_buffer.append((key_vec.squeeze(0), val_vec.squeeze(0), key, value))
+        self._train_buffer.append((key_vec.squeeze(0).cpu(), val_vec.squeeze(0).cpu(), key_str, value_str))
         
-        # [LEGENDARY FEATURE 3] Sticky Token Reward
         with torch.no_grad():
             self.model.self_token[slot_idx] += 0.01
             
         return slot_idx
 
     def get(self, key: str, top_k: int = 1) -> List[str]:
-        key_vec = self._encode(key)
+        key_str = str(key)
+        key_vec = self._encode(key_str)
         with torch.no_grad():
             keys_norm = F.normalize(key_vec, dim=-1)
             proto_norm = F.normalize(self.model.prototype, dim=-1)
@@ -203,128 +220,93 @@ class SWSTMEngine:
             
         results = []
         for idx in top_indices.squeeze(0).tolist():
-            bucket = self.slot_to_values.get(idx, [])
-            
-            # Exact match resolution inside the bucket
-            exact_match = None
-            for k_val, v_val in bucket:
-                if k_val == key:
-                    exact_match = v_val
-                    break
-                    
-            if exact_match is not None:
-                results.append(exact_match)
-            elif bucket:
-                # Fuzzy fallback: return the most recently added value in this conceptual cluster
-                results.append(bucket[-1][1])
-                
-        return results
+            bucket = self.slot_to_values.get(int(idx), [])
+            exact_match = next((v for k, v in bucket if k == key_str), None)
+            if exact_match is not None: results.append(exact_match)
+            elif bucket: results.append(bucket[-1][1])
+        return results[:top_k]
 
-    # [LEGENDARY FEATURE 4] Neural Sleep (Consolidation)
+    # FIX 3: Added missing delete() method for CI
+    def delete(self, key: str) -> bool:
+        key_str = str(key)
+        found = False
+        for slot_idx in list(self.slot_to_values.keys()):
+            new_bucket = [(k, v) for k, v in self.slot_to_values[slot_idx] if k != key_str]
+            if len(new_bucket) < len(self.slot_to_values[slot_idx]):
+                self.slot_to_values[slot_idx] = new_bucket
+                found = True
+        
+        self._train_buffer = [(kv, vv, k, v) for kv, vv, k, v in self._train_buffer if k != key_str]
+        return found
+
     def consolidate(self, epochs: int = 10, lr: float = 0.01, margin: float = 0.2):
-        """
-        Re-organizes memory topology to reduce collisions. 
-        Like biological sleep, it re-clusters memories and defragments slots.
-        """
-        if len(self._train_buffer) < 2:
-            print("[SWSTM] Not enough data to consolidate.")
-            return
-            
-        keys = torch.stack([k for k, _, _, _ in self._train_buffer])
-        print(f"[SWSTM] Entering Consolidation Phase (Neural Sleep) on {len(keys)} memories...")
-        
-        # 1. Re-train prototypes to find better conceptual clusters
+        if len(self._train_buffer) < 2: return
+        keys = torch.stack([k.to(self.device) for k, _, _, _ in self._train_buffer])
         self.model.init_prototypes_from_keys(keys)
-        
-        # 2. Reset the neural memory buffer and buckets
         self.model.memory.zero_()
         self.model.slot_occupied.zero_()
         self.model.write_count.zero_()
         self.slot_to_values.clear()
-        
-        # 3. Re-route all memories into the newly optimized slots
+        self.value_to_slot.clear()
         for key_vec, val_vec, key_str, value_str in self._train_buffer:
             with torch.no_grad():
-                self.model.self_token.zero_() # Clean slate for routing
-                slot_idx = self.model.forward(key_vec.unsqueeze(0), val_vec.unsqueeze(0), op="write").item()
-            
+                self.model.self_token.zero_()
+                slot_idx = self.model.forward(key_vec.unsqueeze(0).to(self.device), val_vec.unsqueeze(0).to(self.device), op="write").item()
             self.slot_to_values[slot_idx].append((key_str, value_str))
             self.value_to_slot[value_str] = slot_idx
-            
-        print("[SWSTM] Consolidation complete. Memory defragmented.")
 
     def train(self, epochs: int = 50, lr: float = 0.01, margin: float = 0.2):
-        if len(self._train_buffer) < 2:
-            print("[SWSTM] Not enough data to train.")
-            return
-        keys = torch.stack([k for k, _, _, _ in self._train_buffer])
+        if len(self._train_buffer) < 2: return
+        keys = torch.stack([k.to(self.device) for k, _, _, _ in self._train_buffer])
         if not self._prototypes_initialized:
-            print(f"[SWSTM] Initializing {self.model.num_slots} prototypes from {len(keys)} keys...")
             self.model.init_prototypes_from_keys(keys)
             self._prototypes_initialized = True
-            
-            # Reset and repopulate buffers cleanly
             self.model.memory.zero_()
             self.model.slot_occupied.zero_()
             self.model.write_count.zero_()
             self.slot_to_values.clear()
             self.value_to_slot.clear()
-            
             for key_vec, val_vec, key_str, value_str in self._train_buffer:
-                slot_idx = self.model.forward(key_vec.unsqueeze(0), val_vec.unsqueeze(0), op="write").item()
+                slot_idx = self.model.forward(key_vec.unsqueeze(0).to(self.device), val_vec.unsqueeze(0).to(self.device), op="write").item()
                 self.slot_to_values[slot_idx].append((key_str, value_str))
                 self.value_to_slot[value_str] = slot_idx
                 
         optimizer = torch.optim.Adam(self.model.parameters(), lr=lr)
-        print(f"[SWSTM] Training on {len(keys)} keys for {epochs} epochs...")
         for epoch in range(epochs):
             optimizer.zero_grad()
             loss = self.model.margin_loss(keys, margin=margin)
             loss.backward()
             optimizer.step()
-            if (epoch + 1) % 10 == 0:
-                print(f"  Epoch {epoch+1}/{epochs}, margin_loss={loss.item():.4f}")
-        print("[SWSTM] Training complete.")
 
     def exact_match_accuracy(self, test_keys: List[str], test_values: List[str]) -> float:
         if not test_keys: return 0.0
-        correct = 0
-        for k, v in zip(test_keys, test_values):
-            retrieved = self.get(k, top_k=1)
-            if retrieved and retrieved[0] == v:
-                correct += 1
-        return correct / len(test_keys)
+        return sum(1 for k, v in zip(test_keys, test_values) if self.get(k, top_k=1) and self.get(k, top_k=1)[0] == v) / len(test_keys)
 
     def paraphrase_accuracy(self, paraphrase_keys: List[str], expected_values: List[str]) -> float:
-        if not paraphrase_keys: return 0.0
-        correct = 0
-        for k, v in zip(paraphrase_keys, expected_values):
-            retrieved = self.get(k, top_k=1)
-            if retrieved and retrieved[0] == v:
-                correct += 1
-        return correct / len(paraphrase_keys)
+        return self.exact_match_accuracy(paraphrase_keys, expected_values)
 
     def save(self, path: Union[str, Path]):
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
         state = {
             "model": self.model.get_state(),
-            "slot_to_values": dict(self.slot_to_values), # Convert defaultdict to dict for JSON/Pickle
+            "slot_to_values": dict(self.slot_to_values),
             "value_to_slot": self.value_to_slot,
-            "key_dim": self.key_dim,
-            "slot_dim": self.slot_dim,
+            "key_dim": self.key_dim, "slot_dim": self.slot_dim,
+            "train_buffer": [(k.cpu(), v.cpu(), ks, vs) for k, v, ks, vs in self._train_buffer]
         }
         torch.save(state, path)
-        print(f"[SWSTM] Saved to {path}")
 
     def load(self, path: Union[str, Path]):
-        state = torch.load(path, map_location=self.device, weights_only=False)
+        try: state = torch.load(path, map_location=self.device, weights_only=False)
+        except TypeError: state = torch.load(path, map_location=self.device)
+        
         self.model.set_state(state["model"])
         self.slot_to_values = defaultdict(list, state["slot_to_values"])
         self.value_to_slot = state["value_to_slot"]
         self.key_dim = state["key_dim"]
         self.slot_dim = state["slot_dim"]
-        print(f"[SWSTM] Loaded from {path}")
+        self._train_buffer = [(k.to(self.device), v.to(self.device), ks, vs) for k, v, ks, vs in state.get("train_buffer", [])]
 
 # --- Hybrid Engine ---
 class HybridEngine:
@@ -338,18 +320,10 @@ class HybridEngine:
 
     def get(self, key: str, top_k: int = 1) -> List[str]:
         result = self.exact.get(key)
-        if result is not None:
-            return [result]
+        if result is not None: return [str(result)]
         return self.swstm.get(key, top_k=top_k)
 
-    def train(self, epochs: int = 50, lr: float = 0.01):
-        self.swstm.train(epochs=epochs, lr=lr)
-
-    def consolidate(self):
-        self.swstm.consolidate()
-
-    def save(self, path: Union[str, Path]):
-        self.swstm.save(path)
-
-    def load(self, path: Union[str, Path]):
-        self.swstm.load(path)
+    def train(self, epochs: int = 50, lr: float = 0.01): self.swstm.train(epochs=epochs, lr=lr)
+    def consolidate(self): self.swstm.consolidate()
+    def save(self, path: Union[str, Path]): self.swstm.save(path)
+    def load(self, path: Union[str, Path]): self.swstm.load(path)
