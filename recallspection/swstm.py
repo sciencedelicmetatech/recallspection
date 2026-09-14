@@ -1,6 +1,5 @@
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 from typing import List, Dict, Tuple, Optional, Any, Union
 from collections import defaultdict
 import hashlib
@@ -183,8 +182,6 @@ class SWSTMEngine:
         
         # 1. EXACT MATCH FIRST (Legendary Upgrade)
         # Scan all populated buckets for an exact string match.
-        # This guarantees 100% exact recall for stored keys, preventing
-        # edge cases where prototype drift or self_token routes to the wrong slot.
         for slot_idx, bucket in self.slot_to_values.items():
             for k, v in bucket:
                 if k == key_str:
@@ -217,7 +214,7 @@ class SWSTMEngine:
                 if not bucket:
                     continue
                 
-                # Exact key match inside selected bucket (redundant but safe)
+                # Exact key match inside selected bucket
                 exact_match = None
                 for k, v in bucket:
                     if k == key_str:
@@ -344,3 +341,42 @@ class SWSTMEngine:
         self._train_buffer = state.get("train_buffer", [])
         if "model_state" in state:
             self.model.load_state_dict(state["model_state"])
+
+
+# --- Hybrid Engine ---
+class HybridEngine:
+    def __init__(self, exact_secret: str = "default_secret", **swstm_kwargs):
+        self.exact = ExactMemory(secret=exact_secret)
+        self.swstm = SWSTMEngine(**swstm_kwargs)
+
+    def add(self, key: str, value: str) -> None:
+        self.exact.add(key, value)
+        self.swstm.add(key, value)
+
+    def get(self, key: str, top_k: int = 1) -> List[str]:
+        exact_val = self.exact.get(key)
+        if exact_val is not None:
+            return [exact_val]
+        return self.swstm.get(key, top_k=top_k)
+
+    def delete(self, key: str) -> bool:
+        return self.swstm.delete(key)
+
+    @property
+    def fact_count(self) -> int:
+        return len(self.exact) + self.swstm.fact_count
+
+    def __len__(self) -> int:
+        return self.fact_count
+        
+    def train(self, *args, **kwargs):
+        self.swstm.train(*args, **kwargs)
+        
+    def consolidate(self):
+        self.swstm.consolidate()
+        
+    def save(self, path: str):
+        self.swstm.save(path)
+        
+    def load(self, path: str):
+        self.swstm.load(path)
