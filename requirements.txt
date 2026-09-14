@@ -1,8 +1,7 @@
 fastapi
 uvicorn
-sentence-transformers
-scikit-learn
-torch
-numpy
 pydantic
-python-dotenv
+torch
+sentence-transformers
+exactmemory-recallspection>=3.0.0
+
