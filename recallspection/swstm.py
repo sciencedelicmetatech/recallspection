@@ -181,7 +181,6 @@ class SWSTMEngine:
         key_str = str(key)
         
         # 1. EXACT MATCH FIRST (Legendary Upgrade)
-        # Scan all populated buckets for an exact string match.
         for slot_idx, bucket in self.slot_to_values.items():
             for k, v in bucket:
                 if k == key_str:
