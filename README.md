@@ -1,5 +1,3 @@
-
-```markdown
 <p align="center">
   <img src="banner.svg" alt="Recallspection Banner" width="800">
 </p>
