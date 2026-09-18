@@ -1,7 +1,3 @@
 fastapi
 uvicorn
 pydantic
-torch
-sentence-transformers
-https://github.com/sciencedelicmetatech/exactmemory.recallspection
-
