@@ -1,0 +1,19 @@
+databases:
+  - name: recallspection-db
+    plan: free
+    databaseName: recallspection
+    user: recallspection
+
+services:
+  - type: web
+    name: recallspection-api
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn api:app --host 0.0.0.0 --port $PORT --workers 1
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.11"
+      - key: DATABASE_URL
+        fromDatabase:
+          name: recallspection-db
+          property: connectionString
