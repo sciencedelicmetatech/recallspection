@@ -8,9 +8,6 @@
 
 **Tamper-evident exact memory + collision-resistant neural associative memory for AI agents.**
 
-
-**Tamper-evident exact memory + collision-resistant neural associative memory for AI agents.**
-
 [![CI](https://github.com/sciencedelicmetatech/recallspection/actions/workflows/ci.yml/badge.svg)](https://github.com/sciencedelicmetatech/recallspection/actions/workflows/ci.yml)
 ![Python](https://img.shields.io/badge/Python-3.10%2B-blue)
 ![FastAPI](https://img.shields.io/badge/FastAPI-0.100%2B-009688)
