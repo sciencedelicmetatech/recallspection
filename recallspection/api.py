@@ -1,7 +1,6 @@
 import os
 import json
 import logging
-import sqlite3
 import secrets
 import hashlib
 import time
@@ -15,6 +14,8 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 import uvicorn
+
+import db
 
 # -----------------------------------------------------------------------------
 # 1. Logging
@@ -70,50 +71,8 @@ def _atomic_write(path: str, content: str) -> None:
 
 
 # -----------------------------------------------------------------------------
-# 4. Database: SQLite (Postgres migration is a separate patch)
+# 4. Database wrappers (delegate to db.py)
 # -----------------------------------------------------------------------------
-def get_db():
-    conn = sqlite3.connect(DB_FILE, timeout=10)
-    conn.row_factory = sqlite3.Row
-    return conn
-
-
-def init_db():
-    conn = get_db()
-    # Defensive migration: rename legacy `limit` column if present.
-    try:
-        cols = [r[1] for r in conn.execute("PRAGMA table_info(api_keys)").fetchall()]
-        if "limit" in cols and "quota_limit" not in cols:
-            conn.execute("ALTER TABLE api_keys RENAME COLUMN `limit` TO quota_limit")
-            logger.info("Migrated old api_keys.limit -> quota_limit")
-    except Exception as e:
-        logger.warning(f"Migration check skipped: {e}")
-
-    conn.execute('''
-        CREATE TABLE IF NOT EXISTS api_keys (
-            key_id TEXT PRIMARY KEY,
-            owner TEXT NOT NULL,
-            plan TEXT NOT NULL,
-            usage INTEGER DEFAULT 0,
-            quota_limit INTEGER DEFAULT 1000,
-            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-            last_used TEXT,
-            is_active INTEGER DEFAULT 1
-        )
-    ''')
-    conn.execute('CREATE INDEX IF NOT EXISTS idx_key_id ON api_keys(key_id)')
-    conn.execute('''
-        CREATE TABLE IF NOT EXISTS signup_log (
-            ip TEXT NOT NULL,
-            day TEXT NOT NULL,
-            signup_count INTEGER DEFAULT 0,
-            PRIMARY KEY (ip, day)
-        )
-    ''')
-    conn.commit()
-    conn.close()
-
-
 LIMIT_MAP = {
     "free": 1000, "pro": 100000, "enterprise": 1000000,
     "agent_free": 5000, "agent_pro": 500000, "agent_enterprise": 5000000,
@@ -121,83 +80,30 @@ LIMIT_MAP = {
 
 
 def _hash_api_key(key: str) -> str:
-    return hashlib.sha256(key.encode("utf-8")).hexdigest()
+    return db.hash_api_key(key)
 
 
 def create_api_key(owner: str, plan: str = "free") -> str:
     key = f"rk_{secrets.token_urlsafe(24)}"
-    key_hash = _hash_api_key(key)
     limit = LIMIT_MAP.get(plan, 1000)
-    conn = get_db()
-    conn.execute(
-        "INSERT INTO api_keys (key_id, owner, plan, quota_limit) VALUES (?, ?, ?, ?)",
-        (key_hash, owner, plan, limit)
-    )
-    conn.commit()
-    conn.close()
+    db.insert_api_key(db.hash_api_key(key), owner, plan, limit)
     return key
 
 
 def get_key_info(key: str) -> Optional[Dict[str, Any]]:
-    conn = get_db()
-    row = conn.execute(
-        "SELECT * FROM api_keys WHERE key_id = ? AND is_active = 1",
-        (_hash_api_key(key),)
-    ).fetchone()
-    conn.close()
-    return dict(row) if row else None
+    return db.fetch_key_info(db.hash_api_key(key))
 
 
 def increment_usage(key: str) -> int:
-    key_hash = _hash_api_key(key)
-    conn = get_db()
-    conn.execute(
-        "UPDATE api_keys SET usage = usage + 1, last_used = CURRENT_TIMESTAMP WHERE key_id = ?",
-        (key_hash,)
-    )
-    conn.commit()
-    row = conn.execute(
-        "SELECT usage FROM api_keys WHERE key_id = ?", (key_hash,)
-    ).fetchone()
-    conn.close()
-    return row[0] if row else 0
+    return db.bump_usage(db.hash_api_key(key))
 
 
 def get_remaining_usage(key: str) -> int:
-    conn = get_db()
-    row = conn.execute(
-        "SELECT quota_limit, usage FROM api_keys WHERE key_id = ?",
-        (_hash_api_key(key),)
-    ).fetchone()
-    conn.close()
-    if row:
-        return row["quota_limit"] - row["usage"]
-    return 0
+    return db.fetch_remaining(db.hash_api_key(key))
 
 
 def check_and_log_signup(ip: str, max_per_day: int = 3) -> bool:
-    day = time.strftime("%Y-%m-%d")
-    conn = get_db()
-    row = conn.execute(
-        "SELECT signup_count FROM signup_log WHERE ip = ? AND day = ?",
-        (ip, day)
-    ).fetchone()
-    if row and row["signup_count"] >= max_per_day:
-        conn.close()
-        return False
-    if row:
-        conn.execute(
-            "UPDATE signup_log SET signup_count = signup_count + 1 WHERE ip = ? AND day = ?",
-            (ip, day)
-        )
-    else:
-        conn.execute(
-            "INSERT INTO signup_log (ip, day, signup_count) VALUES (?, ?, 1)",
-            (ip, day)
-        )
-    conn.commit()
-    conn.close()
-    return True
+    return db.check_and_log_signup(ip, max_per_day)
 
 
 # -----------------------------------------------------------------------------
@@ -239,7 +145,7 @@ def get_swstm():
 
 
 # -----------------------------------------------------------------------------
-# 6. Persistent storage — best-effort, atomic
+# 6. Persistent storage — via db.py
 # -----------------------------------------------------------------------------
 def save_memory():
     data = {}
@@ -257,20 +163,19 @@ def save_memory():
             data["swstm_key_to_value"] = getattr(swstm, "key_to_value", {})
             data["swstm_entity_of"] = getattr(swstm, "_entity_of", {})
             data["swstm_timestamp_of"] = getattr(swstm, "_timestamp_of", {})
-        _atomic_write(MEMORY_FILE, json.dumps(data))
-        logger.info(f"Memory saved to {MEMORY_FILE}")
+        db.save_memory_snapshot(data)
+        logger.info("Memory snapshot saved")
     except Exception as e:
         logger.error(f"Failed to save memory: {e}")
 
 
 def load_memory():
     global exact, swstm
-    if not os.path.exists(MEMORY_FILE):
-        logger.info("No existing memory file, starting fresh.")
-        return
     try:
-        with open(MEMORY_FILE, "r") as f:
-            data = json.load(f)
+        data = db.load_memory_snapshot()
+        if not data:
+            logger.info("No memory snapshot found, starting fresh.")
+            return
 
         if "exact" in data:
             exact = get_exact_memory()
@@ -282,6 +187,7 @@ def load_memory():
             swstm.key_to_value = data["swstm_key_to_value"]
             swstm._entity_of = data.get("swstm_entity_of", {})
             swstm._timestamp_of = data.get("swstm_timestamp_of", {})
+        logger.info("Memory snapshot loaded")
     except Exception as e:
         logger.error(f"Failed to load memory: {e}")
 
@@ -291,7 +197,7 @@ def load_memory():
 # -----------------------------------------------------------------------------
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    init_db()
+    db.init_db()
     load_memory()
     logger.info("Recallspection API started")
     yield
@@ -302,7 +208,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Recallspection API",
     description="Dual-core exact memory with API keys, usage tracking, and agent detection",
-    version="18.0.2",
+    version="18.1.0",
     lifespan=lifespan,
 )
 
@@ -435,13 +341,13 @@ class VerifyResponse(BaseModel):
 async def health():
     return {
         "status": "healthy",
-        "version": "18.0.2",
+        "version": "18.1.0",
         "backend": "ExactMemory v3 + SWSTM v7.0",
+        "storage": "Postgres" if db.USE_POSTGRES else "SQLite",
         "swstm_loaded": swstm is not None,
         "exact_loaded": exact is not None,
         "facts_swstm": getattr(swstm, "fact_count", 0) if swstm else 0,
         "facts_exact": len(exact) if exact else 0,
-        "db_connected": os.path.exists(DB_FILE),
     }
 
 
@@ -638,22 +544,13 @@ def _require_admin(admin_key: str) -> None:
 @app.get("/admin/keys")
 async def list_keys(admin_key: str = Header(..., alias="admin-key")):
     _require_admin(admin_key)
-    conn = get_db()
-    rows = conn.execute(
-        "SELECT key_id, owner, plan, usage, quota_limit, created_at, last_used, is_active "
-        "FROM api_keys"
-    ).fetchall()
-    conn.close()
-    return [dict(r) for r in rows]
+    return db.list_all_keys()
 
 
 @app.post("/admin/revoke/{key_id}")
 async def revoke_key(key_id: str, admin_key: str = Header(..., alias="admin-key")):
     _require_admin(admin_key)
-    conn = get_db()
-    conn.execute("UPDATE api_keys SET is_active = 0 WHERE key_id = ?", (key_id,))
-    conn.commit()
-    conn.close()
+    db.deactivate_key(key_id)
     return {"status": "ok", "message": f"Key {key_id} revoked"}
 
 
