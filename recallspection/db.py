@@ -1,0 +1,396 @@
+"""
+Storage backend for Recallspection API.
+
+Uses Postgres when DATABASE_URL is set (Render production).
+Falls back to SQLite otherwise (local development).
+
+Same interface for both. api.py calls db.<method>(...).
+"""
+
+import os
+import json
+import sqlite3
+import logging
+import time
+import hashlib
+from typing import Optional, Dict, Any, List
+
+logger = logging.getLogger("recallspection-db")
+
+DATABASE_URL = os.getenv("DATABASE_URL")
+DB_FILE = os.getenv("RECALLSPECTION_DB_FILE", "keys.db")
+USE_POSTGRES = bool(DATABASE_URL)
+
+_pg_pool = None
+
+if USE_POSTGRES:
+    try:
+        import psycopg2
+        import psycopg2.extras
+        from psycopg2.pool import SimpleConnectionPool
+        _pg_pool = SimpleConnectionPool(1, 5, dsn=DATABASE_URL)
+        logger.info("Storage backend: Postgres")
+    except ImportError:
+        logger.error("DATABASE_URL set but psycopg2 not installed. Falling back to SQLite.")
+        USE_POSTGRES = False
+        _pg_pool = None
+    except Exception as e:
+        logger.error(f"Postgres pool init failed: {e}. Falling back to SQLite.")
+        USE_POSTGRES = False
+        _pg_pool = None
+else:
+    logger.info("Storage backend: SQLite")
+
+
+# =============================================================================
+# Connection helpers
+# =============================================================================
+def _pg_conn():
+    return _pg_pool.getconn()
+
+
+def _pg_release(conn):
+    _pg_pool.putconn(conn)
+
+
+def _sqlite_conn():
+    conn = sqlite3.connect(DB_FILE, timeout=10)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+# =============================================================================
+# Schema init
+# =============================================================================
+def init_db():
+    if USE_POSTGRES:
+        conn = _pg_conn()
+        try:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS api_keys (
+                        key_id TEXT PRIMARY KEY,
+                        owner TEXT NOT NULL,
+                        plan TEXT NOT NULL,
+                        usage INTEGER DEFAULT 0,
+                        quota_limit INTEGER DEFAULT 1000,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        last_used TIMESTAMP,
+                        is_active INTEGER DEFAULT 1
+                    )
+                """)
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_key_id ON api_keys(key_id)")
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS signup_log (
+                        ip TEXT NOT NULL,
+                        day TEXT NOT NULL,
+                        signup_count INTEGER DEFAULT 0,
+                        PRIMARY KEY (ip, day)
+                    )
+                """)
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS memory_snapshots (
+                        id INTEGER PRIMARY KEY,
+                        data JSONB NOT NULL,
+                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    )
+                """)
+            conn.commit()
+        finally:
+            _pg_release(conn)
+    else:
+        conn = _sqlite_conn()
+        # Defensive migration for legacy schema.
+        try:
+            cols = [r[1] for r in conn.execute("PRAGMA table_info(api_keys)").fetchall()]
+            if "limit" in cols and "quota_limit" not in cols:
+                conn.execute("ALTER TABLE api_keys RENAME COLUMN `limit` TO quota_limit")
+                logger.info("Migrated old api_keys.limit -> quota_limit")
+        except Exception as e:
+            logger.warning(f"Migration check skipped: {e}")
+
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS api_keys (
+                key_id TEXT PRIMARY KEY,
+                owner TEXT NOT NULL,
+                plan TEXT NOT NULL,
+                usage INTEGER DEFAULT 0,
+                quota_limit INTEGER DEFAULT 1000,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                last_used TEXT,
+                is_active INTEGER DEFAULT 1
+            )
+        """)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_key_id ON api_keys(key_id)")
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS signup_log (
+                ip TEXT NOT NULL,
+                day TEXT NOT NULL,
+                signup_count INTEGER DEFAULT 0,
+                PRIMARY KEY (ip, day)
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS memory_snapshots (
+                id INTEGER PRIMARY KEY,
+                data TEXT NOT NULL,
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        conn.commit()
+        conn.close()
+
+    logger.info(f"Database initialized ({'Postgres' if USE_POSTGRES else 'SQLite'})")
+
+
+# =============================================================================
+# Hashing
+# =============================================================================
+def hash_api_key(key: str) -> str:
+    return hashlib.sha256(key.encode("utf-8")).hexdigest()
+
+
+# =============================================================================
+# API key operations
+# =============================================================================
+def insert_api_key(key_hash: str, owner: str, plan: str, quota_limit: int) -> None:
+    if USE_POSTGRES:
+        conn = _pg_conn()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "INSERT INTO api_keys (key_id, owner, plan, quota_limit) "
+                    "VALUES (%s, %s, %s, %s)",
+                    (key_hash, owner, plan, quota_limit),
+                )
+            conn.commit()
+        finally:
+            _pg_release(conn)
+    else:
+        conn = _sqlite_conn()
+        conn.execute(
+            "INSERT INTO api_keys (key_id, owner, plan, quota_limit) VALUES (?, ?, ?, ?)",
+            (key_hash, owner, plan, quota_limit),
+        )
+        conn.commit()
+        conn.close()
+
+
+def fetch_key_info(key_hash: str) -> Optional[Dict[str, Any]]:
+    if USE_POSTGRES:
+        conn = _pg_conn()
+        try:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    "SELECT * FROM api_keys WHERE key_id = %s AND is_active = 1",
+                    (key_hash,),
+                )
+                row = cur.fetchone()
+            return dict(row) if row else None
+        finally:
+            _pg_release(conn)
+    else:
+        conn = _sqlite_conn()
+        row = conn.execute(
+            "SELECT * FROM api_keys WHERE key_id = ? AND is_active = 1",
+            (key_hash,),
+        ).fetchone()
+        conn.close()
+        return dict(row) if row else None
+
+
+def fetch_remaining(key_hash: str) -> int:
+    if USE_POSTGRES:
+        conn = _pg_conn()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT quota_limit, usage FROM api_keys WHERE key_id = %s",
+                    (key_hash,),
+                )
+                row = cur.fetchone()
+            return (row[0] - row[1]) if row else 0
+        finally:
+            _pg_release(conn)
+    else:
+        conn = _sqlite_conn()
+        row = conn.execute(
+            "SELECT quota_limit, usage FROM api_keys WHERE key_id = ?",
+            (key_hash,),
+        ).fetchone()
+        conn.close()
+        return (row["quota_limit"] - row["usage"]) if row else 0
+
+
+def bump_usage(key_hash: str) -> int:
+    if USE_POSTGRES:
+        conn = _pg_conn()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE api_keys SET usage = usage + 1, last_used = CURRENT_TIMESTAMP "
+                    "WHERE key_id = %s RETURNING usage",
+                    (key_hash,),
+                )
+                row = cur.fetchone()
+            conn.commit()
+            return row[0] if row else 0
+        finally:
+            _pg_release(conn)
+    else:
+        conn = _sqlite_conn()
+        conn.execute(
+            "UPDATE api_keys SET usage = usage + 1, last_used = CURRENT_TIMESTAMP "
+            "WHERE key_id = ?",
+            (key_hash,),
+        )
+        conn.commit()
+        row = conn.execute(
+            "SELECT usage FROM api_keys WHERE key_id = ?", (key_hash,)
+        ).fetchone()
+        conn.close()
+        return row["usage"] if row else 0
+
+
+def check_and_log_signup(ip: str, max_per_day: int = 3) -> bool:
+    day = time.strftime("%Y-%m-%d")
+    if USE_POSTGRES:
+        conn = _pg_conn()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT signup_count FROM signup_log WHERE ip = %s AND day = %s",
+                    (ip, day),
+                )
+                row = cur.fetchone()
+                if row and row[0] >= max_per_day:
+                    return False
+                if row:
+                    cur.execute(
+                        "UPDATE signup_log SET signup_count = signup_count + 1 "
+                        "WHERE ip = %s AND day = %s",
+                        (ip, day),
+                    )
+                else:
+                    cur.execute(
+                        "INSERT INTO signup_log (ip, day, signup_count) VALUES (%s, %s, 1)",
+                        (ip, day),
+                    )
+            conn.commit()
+            return True
+        finally:
+            _pg_release(conn)
+    else:
+        conn = _sqlite_conn()
+        row = conn.execute(
+            "SELECT signup_count FROM signup_log WHERE ip = ? AND day = ?",
+            (ip, day),
+        ).fetchone()
+        if row and row["signup_count"] >= max_per_day:
+            conn.close()
+            return False
+        if row:
+            conn.execute(
+                "UPDATE signup_log SET signup_count = signup_count + 1 "
+                "WHERE ip = ? AND day = ?",
+                (ip, day),
+            )
+        else:
+            conn.execute(
+                "INSERT INTO signup_log (ip, day, signup_count) VALUES (?, ?, 1)",
+                (ip, day),
+            )
+        conn.commit()
+        conn.close()
+        return True
+
+
+def list_all_keys() -> List[Dict[str, Any]]:
+    if USE_POSTGRES:
+        conn = _pg_conn()
+        try:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    "SELECT key_id, owner, plan, usage, quota_limit, created_at, "
+                    "last_used, is_active FROM api_keys ORDER BY created_at DESC"
+                )
+                rows = cur.fetchall()
+            return [dict(r) for r in rows]
+        finally:
+            _pg_release(conn)
+    else:
+        conn = _sqlite_conn()
+        rows = conn.execute(
+            "SELECT key_id, owner, plan, usage, quota_limit, created_at, "
+            "last_used, is_active FROM api_keys ORDER BY created_at DESC"
+        ).fetchall()
+        conn.close()
+        return [dict(r) for r in rows]
+
+
+def deactivate_key(key_id: str) -> None:
+    if USE_POSTGRES:
+        conn = _pg_conn()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE api_keys SET is_active = 0 WHERE key_id = %s", (key_id,)
+                )
+            conn.commit()
+        finally:
+            _pg_release(conn)
+    else:
+        conn = _sqlite_conn()
+        conn.execute("UPDATE api_keys SET is_active = 0 WHERE key_id = ?", (key_id,))
+        conn.commit()
+        conn.close()
+
+
+# =============================================================================
+# Memory snapshot persistence
+# =============================================================================
+def save_memory_snapshot(data: Dict[str, Any]) -> None:
+    """Persist the current in-memory store as a single JSON blob."""
+    if USE_POSTGRES:
+        conn = _pg_conn()
+        try:
+            with conn.cursor() as cur:
+                cur.execute("DELETE FROM memory_snapshots")
+                cur.execute(
+                    "INSERT INTO memory_snapshots (id, data) VALUES (1, %s)",
+                    (json.dumps(data),),
+                )
+            conn.commit()
+        finally:
+            _pg_release(conn)
+    else:
+        conn = _sqlite_conn()
+        conn.execute("DELETE FROM memory_snapshots")
+        conn.execute(
+            "INSERT INTO memory_snapshots (id, data) VALUES (1, ?)",
+            (json.dumps(data),),
+        )
+        conn.commit()
+        conn.close()
+
+
+def load_memory_snapshot() -> Optional[Dict[str, Any]]:
+    if USE_POSTGRES:
+        conn = _pg_conn()
+        try:
+            with conn.cursor() as cur:
+                cur.execute("SELECT data FROM memory_snapshots WHERE id = 1")
+                row = cur.fetchone()
+            if not row:
+                return None
+            # psycopg2 returns JSONB as Python dict already.
+            return row[0] if isinstance(row[0], dict) else json.loads(row[0])
+        finally:
+            _pg_release(conn)
+    else:
+        conn = _sqlite_conn()
+        row = conn.execute("SELECT data FROM memory_snapshots WHERE id = 1").fetchone()
+        conn.close()
+        if row:
+            return json.loads(row[0])
+        return None
