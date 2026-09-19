@@ -16,7 +16,6 @@ class ExactMemory:
 
     def _pack(self, value: Any) -> Any:
         # Store the original value so tests can compare real Python objects.
-        # Production persistence/serialization should happen separately.
         return value
 
     def add(self, key: str, value: Any) -> None:
@@ -108,6 +107,7 @@ class SWSTMEngine:
         
         self.slot_to_values: Dict[int, List[Tuple[str, str]]] = defaultdict(list)
         self.value_to_slot: Dict[str, int] = {}
+        self.key_to_slot_idx: Dict[str, int] = {}  # FIX 2: Canonical index map
         self._train_buffer: List[Tuple[torch.Tensor, torch.Tensor, str, str]] = []
         
         if encoder is not None:
@@ -156,7 +156,8 @@ class SWSTMEngine:
             if k != key_str
         ]
 
-        # remove old key from buckets
+        # remove old key from index and buckets
+        self.key_to_slot_idx.pop(key_str, None)
         for slot_idx in list(self.slot_to_values.keys()):
             self.slot_to_values[slot_idx] = [
                 (k, v)
@@ -174,6 +175,7 @@ class SWSTMEngine:
             slot_idx = int(torch.argmax(sim, dim=-1).item())
 
         self.slot_to_values[slot_idx].append((key_str, value_str))
+        self.key_to_slot_idx[key_str] = slot_idx  # Update index
         self.value_to_slot[value_str] = slot_idx
 
         self._train_buffer.append(
@@ -193,36 +195,42 @@ class SWSTMEngine:
     def get(self, key: str, top_k: int = 1) -> List[str]:
         key_str = str(key)
         
-        # 1. EXACT MATCH FIRST (Legendary Upgrade)
-        for slot_idx, bucket in self.slot_to_values.items():
-            for k, v in bucket:
+        # 1. O(1) EXACT MATCH FIRST via Index Map
+        slot_idx = self.key_to_slot_idx.get(key_str)
+        if slot_idx is not None:
+            for k, v in self.slot_to_values.get(slot_idx, []):
                 if k == key_str:
                     return [v]
+            # If index is stale (key deleted but not removed from map), repair and fall through
+            self.key_to_slot_idx.pop(key_str, None)
 
         # 2. NEURAL ROUTING (Fuzzy fallback for unseen keys)
+        if not self.slot_to_values:
+            return []
+
         key_vec = self._encode(key_str)
         
         with torch.no_grad():
-            sim = self.model.forward(key_vec, op="read")
+            sim = self.model.forward(key_vec, op="read")  # shape: (1, num_slots)
             
-            # Mask unoccupied slots
-            mask = torch.full_like(sim, float('-inf'))
-            for slot_idx in self.slot_to_values.keys():
-                if slot_idx < self.num_slots:
-                    mask[slot_idx] = 0.0
+            # THE FIX: Mask unoccupied slots with -inf (must be sized to num_slots)
+            mask = torch.full((1, self.num_slots), float('-inf'), device=self.device)
+            for occ_slot in self.slot_to_values.keys():
+                if 0 <= occ_slot < self.num_slots:
+                    mask[0, occ_slot] = 0.0
             
-            sim = sim + mask
+            scores = sim + mask
             
             # Select top slots
             k_select = min(top_k, len(self.slot_to_values))
             if k_select == 0:
                 return []
                 
-            top_sim, top_slots = torch.topk(sim, k_select, dim=-1)
+            top_sim, top_slots = torch.topk(scores, k_select, dim=-1)
             
             results = []
-            for slot_idx in top_slots[0].tolist():
-                bucket = self.slot_to_values.get(slot_idx, [])
+            for s in top_slots[0].tolist():
+                bucket = self.slot_to_values.get(s, [])
                 if not bucket:
                     continue
                 
@@ -251,26 +259,29 @@ class SWSTMEngine:
 
     def delete(self, key: str) -> bool:
         key_str = str(key)
-        found = False
         
-        orig_len = len(self._train_buffer)
+        # Check existence
+        found = key_str in self.key_to_slot_idx or any(
+            k == key_str for bucket in self.slot_to_values.values() for k, _ in bucket
+        )
+        
+        # Clear from index
+        self.key_to_slot_idx.pop(key_str, None)
+        
+        # Clear from buffer
         self._train_buffer = [
             (kv, vv, k, v)
             for kv, vv, k, v in self._train_buffer
             if k != key_str
         ]
-        if len(self._train_buffer) < orig_len:
-            found = True
-            
+        
+        # Clear from buckets
         for slot_idx in list(self.slot_to_values.keys()):
-            orig_bucket_len = len(self.slot_to_values[slot_idx])
             self.slot_to_values[slot_idx] = [
                 (k, v)
                 for k, v in self.slot_to_values[slot_idx]
                 if k != key_str
             ]
-            if len(self.slot_to_values[slot_idx]) < orig_bucket_len:
-                found = True
             if not self.slot_to_values[slot_idx]:
                 del self.slot_to_values[slot_idx]
                 
@@ -337,6 +348,7 @@ class SWSTMEngine:
         state = {
             "slot_to_values": dict(self.slot_to_values),
             "value_to_slot": self.value_to_slot,
+            "key_to_slot_idx": self.key_to_slot_idx,  # Persist the index
             "train_buffer": [
                 (kv.cpu(), vv.cpu(), k, v) for kv, vv, k, v in self._train_buffer
             ],
@@ -351,6 +363,12 @@ class SWSTMEngine:
         self.slot_to_values.update(state.get("slot_to_values", {}))
         self.value_to_slot = state.get("value_to_slot", {})
         self._train_buffer = state.get("train_buffer", [])
+        
+        # Load index, or rebuild it if loading an old checkpoint
+        self.key_to_slot_idx = state.get("key_to_slot_idx") or {
+            k: s for s, bucket in self.slot_to_values.items() for k, _ in bucket
+        }
+        
         if "model_state" in state:
             self.model.load_state_dict(state["model_state"])
 
@@ -372,7 +390,10 @@ class HybridEngine:
         return self.swstm.get(key, top_k=top_k)
 
     def delete(self, key: str) -> bool:
-        return self.swstm.delete(key)
+        # Attempt delete on both engines
+        d1 = self.exact.delete(key)
+        d2 = self.swstm.delete(key)
+        return d1 or d2
 
     @property
     def fact_count(self) -> int:
@@ -392,11 +413,8 @@ class HybridEngine:
         
     def load(self, path: str):
         self.swstm.load(path)
-        
-        # ------------------------------------------------------------------
-# Backward compatibility aliases
-# ------------------------------------------------------------------
 
-# Legacy name expected by recallspection/__init__.py and possibly api.py
+
+# --- Backward compatibility aliases ---
+# Legacy name expected by recallspection/__init__.py
 SWSTMCore = SWSTMEngine
-
