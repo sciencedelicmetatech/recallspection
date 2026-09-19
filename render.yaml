@@ -1,19 +1,37 @@
-databases:
-  - name: recallspection-db
-    plan: free
-    databaseName: recallspection
-    user: recallspection
-
 services:
   - type: web
-    name: recallspection-api
-    runtime: python
+    name: recallspection
+    env: python
+    region: singapore
+    plan: starter
     buildCommand: pip install -r requirements.txt
-    startCommand: uvicorn api:app --host 0.0.0.0 --port $PORT --workers 1
+    startCommand: uvicorn api:app --host 0.0.0.0 --port $PORT
     envVars:
+      - key: RECALLSPECTION_EXACT_SECRET
+        sync: false
+      - key: RECALLSPECTION_ADMIN_KEY
+        sync: false
+      - key: RECALLSPECTION_SIGNUP_SECRET
+        sync: false
+      - key: RECALLSPECTION_MEMORY_FILE
+        value: /data/memory.db
+      - key: RECALLSPECTION_SWSTM_FILE
+        value: /data/swstm.pt
+      - key: RECALLSPECTION_DB_FILE
+        value: /data/keys.db
+      - key: RECALLSPECTION_EXACT_LOG
+        value: /data/transparency.log
+      - key: STRIPE_SECRET_KEY
+        sync: false
+      - key: STRIPE_WEBHOOK_SECRET
+        sync: false
+      - key: FRONTEND_URL
+        value: https://recallspection.onrender.com
       - key: PYTHON_VERSION
-        value: "3.11.9"
-      - key: DATABASE_URL
-        fromDatabase:
-          name: recallspection-db
-          property: connectionString
+        value: 3.11.0
+    disk:
+      name: recallspection-data
+      mountPath: /data
+      sizeGB: 5
+
+
