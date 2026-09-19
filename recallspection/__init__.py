@@ -4,13 +4,6 @@ Recallspection – Dual-core exact memory for AI agents.
 
 __version__ = "18.0.0"
 
-from .swstm import (
-    ExactMemory,
-    HybridEngine,
-    SWSTMEngine,
-    SWSTMCore,
-)
-
 __all__ = [
     "ExactMemory",
     "HybridEngine",
@@ -18,3 +11,8 @@ __all__ = [
     "SWSTMCore",
 ]
 
+def __getattr__(name):
+    if name in __all__:
+        from . import swstm
+        return getattr(swstm, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

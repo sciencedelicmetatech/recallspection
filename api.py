@@ -14,7 +14,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, Field
 import uvicorn
 
-import db
+from recallspection import db
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("recallspection-api")
