@@ -48,7 +48,7 @@
 > **Design Philosophy:**  
 > Recallspection is not a general cure for LLM hallucination. It is a secure memory infrastructure layer that provides deterministic recall for stored facts, cryptographic tamper evidence for persisted records, and reduced overwrite-based forgetting in neural slot memory.
 
-**TL;DR:** `get(k)` = `v_set` ∨ `Err(Tamper)` — never silent wrong data.
+**TL;DR:** `get(k)` = `v_set` ∨ `Err(Tamper)` : never silent wrong data.
 
 ---
 
