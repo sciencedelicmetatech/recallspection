@@ -1,144 +1,154 @@
 import streamlit as st
+import os
 import sqlite3
 import pandas as pd
-import time
-import hashlib
-import tempfile
-import os
-from datetime import datetime
+import requests
+import json
 
-st.set_page_config(page_title="Recallspection Admin", layout="wide")
+st.set_page_config(page_title="Recallspection Command Centre", layout="wide", page_icon="🧠")
 
-# ---------- DATABASE SETUP ----------
-def init_db():
-    db_path = os.path.join(tempfile.gettempdir(), 'recallspection.db')
-    conn = sqlite3.connect(db_path)
-    c = conn.cursor()
-    c.execute('''CREATE TABLE IF NOT EXISTS users
-                 (id INTEGER PRIMARY KEY AUTOINCREMENT, email TEXT UNIQUE, api_key TEXT, plan TEXT, created_at TIMESTAMP, is_active BOOLEAN)''')
-    c.execute('''CREATE TABLE IF NOT EXISTS usage
-                 (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, query_type TEXT, timestamp TIMESTAMP, tokens_used INTEGER)''')
-    c.execute('''CREATE TABLE IF NOT EXISTS payments
-                 (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, amount REAL, currency TEXT, status TEXT, timestamp TIMESTAMP)''')
-    conn.commit()
+# --- CONFIGURATION ---
+# Point these to your actual persistent paths and API
+API_BASE_URL = os.getenv("RECALLSPECTION_API_URL", "http://localhost:8000")
+ADMIN_KEY = os.getenv("RECALLSPECTION_ADMIN_KEY", "dev-admin-key")
+DB_FILE = os.getenv("RECALLSPECTION_DB_FILE", "keys.db")
+LOG_FILE = os.getenv("RECALLSPECTION_EXACT_LOG", "transparency.log")
+
+# --- AUTH GATE ---
+def check_password():
+    if "password_correct" not in st.session_state:
+        st.session_state["password_correct"] = False
+
+    if not st.session_state["password_correct"]:
+        st.title("🔒 Recallspection Admin")
+        pwd = st.text_input("Enter Admin Password", type="password")
+        if st.button("Login"):
+            if pwd == ADMIN_KEY:
+                st.session_state["password_correct"] = True
+                st.rerun()
+            else:
+                st.error("Incorrect password")
+        st.stop()
+
+check_password()
+
+# --- SIDEBAR ---
+st.sidebar.title("🧠 Command Centre")
+st.sidebar.markdown(f"**API:** `{API_BASE_URL}`")
+st.sidebar.markdown(f"**DB:** `{DB_FILE}`")
+if st.sidebar.button("Logout"):
+    st.session_state["password_correct"] = False
+    st.rerun()
+
+page = st.sidebar.radio("Navigate", ["Overview", "API Keys", "Transparency Log", "Actions"])
+
+# --- HELPERS ---
+def get_db_connection():
+    if not os.path.exists(DB_FILE):
+        return None
+    conn = sqlite3.connect(DB_FILE)
+    conn.row_factory = sqlite3.Row
     return conn
 
-try:
-    conn = init_db()
-    st.sidebar.success("✅ Database connected")
-except Exception as e:
-    st.sidebar.error(f"❌ Database error: {e}")
-    conn = None
-
-st.sidebar.title("🧠 Recallspection")
-st.sidebar.markdown("### Command Centre")
-
-page = st.sidebar.radio("Navigate", ["Dashboard", "Users", "Usage", "Payments", "System"])
-
-# ---------- DASHBOARD ----------
-if page == "Dashboard":
-    st.title("📊 Dashboard")
-
-    if conn:
-        c = conn.cursor()
-        c.execute("SELECT COUNT(*) FROM users WHERE is_active=1")
-        total = c.fetchone()[0]
-        c.execute("SELECT COUNT(*) FROM users WHERE created_at > datetime('now', '-7 days')")
-        new = c.fetchone()[0]
-        c.execute("SELECT COUNT(*) FROM usage WHERE timestamp > datetime('now', '-24 hours')")
-        q24 = c.fetchone()[0]
-        c.execute("SELECT SUM(amount) FROM payments WHERE status='completed' AND timestamp > datetime('now', '-30 days')")
-        rev = c.fetchone()[0] or 0
-
-        col1, col2, col3, col4 = st.columns(4)
-        col1.metric("Active Users", total)
-        col2.metric("New Users (7d)", new)
-        col3.metric("Queries (24h)", q24)
-        col4.metric("Revenue (30d)", f"${rev:.2f}")
-
-        st.subheader("📋 Recent Activity")
-        c.execute('''SELECT u.email, us.query_type, us.timestamp 
-                     FROM usage us JOIN users u ON us.user_id = u.id 
-                     ORDER BY us.timestamp DESC LIMIT 20''')
-        recent = c.fetchall()
-        if recent:
-            st.dataframe(pd.DataFrame(recent, columns=["Email", "Query Type", "Timestamp"]), use_container_width=True)
+def api_request(method, endpoint, json_data=None):
+    try:
+        headers = {"admin-key": ADMIN_KEY}
+        if method == "GET":
+            res = requests.get(f"{API_BASE_URL}{endpoint}", headers=headers, timeout=5)
         else:
-            st.info("No recent activity. Click 'Add Demo User' to get started.")
-    else:
-        st.error("Database not connected. Please check the logs.")
+            res = requests.post(f"{API_BASE_URL}{endpoint}", headers=headers, json=json_data, timeout=30)
+        return res
+    except Exception as e:
+        st.error(f"API Connection Error: {e}")
+        return None
 
-# ---------- USERS ----------
-elif page == "Users":
-    st.title("👥 Users")
+# --- PAGES ---
+if page == "Overview":
+    st.title("📊 System Overview")
+    
+    # Live Health Check
+    try:
+        health = requests.get(f"{API_BASE_URL}/health", timeout=3).json()
+        col1, col2, col3 = st.columns(3)
+        col1.metric("API Status", health.get("status", "unknown").upper())
+        col2.metric("SWSTM Facts", health.get("facts_swstm", 0))
+        col3.metric("Exact Facts", health.get("facts_exact", 0))
+        with st.expander("Raw Health Payload"):
+            st.json(health)
+    except:
+        st.warning("Could not connect to live API. Showing offline DB stats only.")
+
+    # DB Stats
+    conn = get_db_connection()
     if conn:
-        c = conn.cursor()
-        c.execute('''SELECT id, email, plan, created_at, is_active FROM users ORDER BY created_at DESC''')
-        users = c.fetchall()
-        if users:
-            st.dataframe(pd.DataFrame(users, columns=["ID", "Email", "Plan", "Created", "Active"]), use_container_width=True)
+        st.subheader("Database Stats")
+        df = pd.read_sql_query("SELECT plan, COUNT(*) as count, SUM(usage) as total_usage FROM api_keys GROUP BY plan", conn)
+        st.dataframe(df, use_container_width=True)
+        conn.close()
+    else:
+        st.error(f"Database file not found at {DB_FILE}")
+
+elif page == "API Keys":
+    st.title("🔑 API Key Management")
+    conn = get_db_connection()
+    if conn:
+        df = pd.read_sql_query("SELECT key_id, owner, plan, usage, `limit`, is_active, created_at FROM api_keys ORDER BY created_at DESC", conn)
+        st.dataframe(df, use_container_width=True)
+        
+        st.subheader("Revoke Key")
+        key_to_revoke = st.text_input("Enter key_id to revoke (e.g., rk_...)")
+        if st.button("Revoke", type="primary"):
+            res = api_request("POST", f"/admin/revoke/{key_to_revoke}")
+            if res and res.status_code == 200:
+                st.success(f"Revoked {key_to_revoke}")
+                st.rerun()
+            else:
+                st.error(f"Failed: {res.text if res else 'No response'}")
+        conn.close()
+    else:
+        st.error(f"Database file not found at {DB_FILE}")
+
+elif page == "Transparency Log":
+    st.title("📜 ExactMemory Transparency Log")
+    st.caption("Hash-chained audit trail. Do not edit this file manually.")
+    
+    if os.path.exists(LOG_FILE):
+        with open(LOG_FILE, 'r') as f:
+            lines = f.readlines()
+        
+        # Show last 20 entries in reverse chronological order
+        entries = []
+        for line in reversed(lines[-20:]):
+            try:
+                entries.append(json.loads(line.strip()))
+            except:
+                pass
+        
+        if entries:
+            st.dataframe(pd.DataFrame(entries), use_container_width=True)
         else:
-            st.info("No users yet.")
+            st.info("Log is empty.")
     else:
-        st.error("Database not connected.")
+        st.warning(f"Log file not found at {LOG_FILE}. Add a fact to ExactMemory to generate it.")
 
-# ---------- USAGE ----------
-elif page == "Usage":
-    st.title("📈 Usage")
-    if conn:
-        days = st.number_input("Days", 1, 90, 7)
-        c = conn.cursor()
-        c.execute('''SELECT DATE(timestamp) as day, COUNT(*) as count 
-                     FROM usage 
-                     WHERE timestamp > datetime('now', ?) 
-                     GROUP BY DATE(timestamp)''', (f'-{days} days',))
-        data = c.fetchall()
-        if data:
-            st.line_chart(pd.DataFrame(data, columns=["Date", "Queries"]).set_index("Date"))
-        else:
-            st.info("No usage data yet.")
-    else:
-        st.error("Database not connected.")
-
-# ---------- PAYMENTS ----------
-elif page == "Payments":
-    st.title("💰 Payments")
-    if conn:
-        c = conn.cursor()
-        c.execute('''SELECT p.id, u.email, p.amount, p.status, p.timestamp 
-                     FROM payments p JOIN users u ON p.user_id = u.id 
-                     ORDER BY p.timestamp DESC LIMIT 100''')
-        payments = c.fetchall()
-        if payments:
-            st.dataframe(pd.DataFrame(payments, columns=["ID", "User", "Amount", "Status", "Timestamp"]), use_container_width=True)
-        else:
-            st.info("No payments yet.")
-    else:
-        st.error("Database not connected.")
-
-# ---------- SYSTEM ----------
-elif page == "System":
-    st.title("⚙️ System")
-    if conn:
-        st.success("✅ Database: Connected")
-        st.write(f"Database path: {os.path.join(tempfile.gettempdir(), 'recallspection.db')}")
-    else:
-        st.error("❌ Database: Not connected")
-    st.info("📊 Streamlit Cloud is running.")
-
-# ---------- ADD DEMO USER ----------
-if st.sidebar.button("➕ Add Demo User"):
-    if conn:
-        c = conn.cursor()
-        email = f"demo_{int(time.time())}@example.com"
-        api_key = hashlib.md5(email.encode()).hexdigest()[:16]
-        try:
-            c.execute("INSERT INTO users (email, api_key, plan, created_at, is_active) VALUES (?, ?, ?, ?, ?)",
-                      (email, api_key, "free", datetime.now(), 1))
-            conn.commit()
-            st.sidebar.success(f"✅ Added: {email}")
-            st.sidebar.info(f"🔑 API Key: {api_key}")
-        except Exception as e:
-            st.sidebar.error(f"Error: {e}")
-    else:
-        st.sidebar.error("Database not connected")
+elif page == "Actions":
+    st.title("⚙️ Admin Actions")
+    st.warning("These actions trigger heavy operations on the live API server.")
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("💾 Force Save Memory"):
+            res = api_request("POST", "/admin/save")
+            if res and res.status_code == 200:
+                st.success("Memory flushed to disk.")
+            else:
+                st.error("Failed to save.")
+                
+    with col2:
+        if st.button("🧠 Run Neural Consolidation"):
+            with st.spinner("Consolidating SWSTM prototypes..."):
+                res = api_request("POST", "/admin/consolidate")
+                if res and res.status_code == 200:
+                    st.success("Consolidation complete and saved.")
+                else:
+                    st.error("Failed to consolidate.")
