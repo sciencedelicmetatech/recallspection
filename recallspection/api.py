@@ -16,48 +16,27 @@ import uvicorn
 
 import db
 
-# -----------------------------------------------------------------------------
-# 1. Logging
-# -----------------------------------------------------------------------------
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("recallspection-api")
 
-# -----------------------------------------------------------------------------
-# 2. Config
-# -----------------------------------------------------------------------------
 SWSTM_MODE = os.getenv("SWSTM_MODE", "flat")
 ADMIN_KEY = os.getenv("RECALLSPECTION_ADMIN_KEY")
-
 SELF_SIGNUP_PLANS = {"free", "agent_free"}
 MAX_VALUE_LENGTH = 100_000
 
-# In-process rate limiter. Works with a single worker only.
-# NOTE ON WORKER MODEL:
-#   This app keeps in-memory ExactMemory/SWSTM state and uses in-process
-#   rate limit counters. Run with --workers 1. Multi-worker setups will
-#   overwrite each other's memory snapshots and have independent counters.
 RATE_WINDOW_SECONDS = 60
 RATE_MAX_REQUESTS = 120
 
-# -----------------------------------------------------------------------------
-# 3. Helpers
-# -----------------------------------------------------------------------------
 def _client_ip(request: Request) -> str:
-    """Trust only the LAST XFF entry (Render appends the real client IP)."""
     xff = request.headers.get("x-forwarded-for", "")
     if xff:
         return xff.split(",")[-1].strip()
     return request.client.host if request.client else "unknown"
 
-
-# -----------------------------------------------------------------------------
-# 4. Database wrappers (delegate to db.py)
-# -----------------------------------------------------------------------------
 LIMIT_MAP = {
     "free": 1000, "pro": 100000, "enterprise": 1000000,
     "agent_free": 5000, "agent_pro": 500000, "agent_enterprise": 5000000,
 }
-
 
 def create_api_key(owner: str, plan: str = "free") -> str:
     key = f"rk_{secrets.token_urlsafe(24)}"
@@ -65,25 +44,17 @@ def create_api_key(owner: str, plan: str = "free") -> str:
     db.insert_api_key(db.hash_api_key(key), owner, plan, limit)
     return key
 
-
 def get_key_info(key: str) -> Optional[Dict[str, Any]]:
     return db.fetch_key_info(db.hash_api_key(key))
-
 
 def get_remaining_usage(key: str) -> int:
     return db.fetch_remaining(db.hash_api_key(key))
 
-
 def check_and_log_signup(ip: str, max_per_day: int = 3) -> bool:
     return db.check_and_log_signup(ip, max_per_day)
 
-
-# -----------------------------------------------------------------------------
-# 5. Lazy imports (ExactMemory / SWSTM)
-# -----------------------------------------------------------------------------
 swstm = None
 exact = None
-
 
 def get_exact_memory():
     global exact
@@ -105,7 +76,6 @@ def get_exact_memory():
         logger.info(f"ExactMemory initialized: {type(exact).__name__}")
     return exact
 
-
 def get_swstm():
     global swstm
     if swstm is None:
@@ -114,10 +84,6 @@ def get_swstm():
         logger.info(f"SWSTMEngine initialized (mode={SWSTM_MODE})")
     return swstm
 
-
-# -----------------------------------------------------------------------------
-# 6. Persistent storage — via db.py
-# -----------------------------------------------------------------------------
 def save_memory():
     data = {}
     try:
@@ -141,7 +107,6 @@ def save_memory():
     except Exception:
         logger.exception("Failed to save memory")
 
-
 def load_memory():
     global exact, swstm
     try:
@@ -149,12 +114,10 @@ def load_memory():
         if not data:
             logger.info("No memory snapshot found, starting fresh.")
             return
-
         if "exact" in data:
             exact = get_exact_memory()
             if hasattr(exact, "load_state"):
                 exact.load_state(data["exact"])
-
         if "swstm_key_to_value" in data:
             swstm = get_swstm()
             swstm.key_to_value = data["swstm_key_to_value"]
@@ -164,10 +127,6 @@ def load_memory():
     except Exception:
         logger.exception("Failed to load memory")
 
-
-# -----------------------------------------------------------------------------
-# 7. FastAPI app
-# -----------------------------------------------------------------------------
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     db.init_db()
@@ -177,7 +136,6 @@ async def lifespan(app: FastAPI):
     save_memory()
     db.close_db()
     logger.info("Recallspection API shutting down")
-
 
 app = FastAPI(
     title="Recallspection API",
@@ -189,12 +147,7 @@ app = FastAPI(
 os.makedirs("static", exist_ok=True)
 app.mount("/static", StaticFiles(directory="static", html=False), name="static")
 
-
-# -----------------------------------------------------------------------------
-# 8. Rate limiter middleware (single-worker only)
-# -----------------------------------------------------------------------------
 _rate_buckets: Dict[str, deque] = defaultdict(deque)
-
 
 @app.middleware("http")
 async def rate_limit_middleware(request: Request, call_next):
@@ -213,7 +166,6 @@ async def rate_limit_middleware(request: Request, call_next):
     bucket.append(now)
     return await call_next(request)
 
-
 @app.get("/", response_class=HTMLResponse)
 async def root():
     try:
@@ -222,12 +174,7 @@ async def root():
     except FileNotFoundError:
         return {"error": "index.html not found"}
 
-
-# -----------------------------------------------------------------------------
-# 9. Auth
-# -----------------------------------------------------------------------------
 api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
-
 
 def is_agent_request(request: Request) -> bool:
     user_agent = request.headers.get("user-agent", "").lower()
@@ -240,7 +187,6 @@ def is_agent_request(request: Request) -> bool:
             return True
     return "colab" in request.headers.get("referer", "").lower()
 
-
 async def _validate_key(request: Request, api_key: str, increment: bool):
     if api_key is None:
         raise HTTPException(status_code=401, detail="Missing X-API-Key header.")
@@ -250,9 +196,7 @@ async def _validate_key(request: Request, api_key: str, increment: bool):
         raise HTTPException(
             status_code=403, detail="Invalid API Key or key deactivated."
         )
-
     if increment:
-        # Atomic consume: returns new usage, or None if inactive/exhausted.
         new_usage = db.consume_usage(key_hash)
         if new_usage is None:
             raise HTTPException(
@@ -263,52 +207,43 @@ async def _validate_key(request: Request, api_key: str, increment: bool):
                 ),
             )
         key_info["usage"] = new_usage
-
     request.state.key_info = key_info
     request.state.api_key = api_key
     request.state.is_agent = is_agent_request(request)
     return key_info
 
-
 async def validate_api_key(
     request: Request,
     api_key: str = Depends(api_key_header),
 ):
-    """Standard auth. Consumes one quota unit atomically."""
     return await _validate_key(request, api_key, increment=True)
-
 
 async def validate_api_key_no_count(
     request: Request,
     api_key: str = Depends(api_key_header),
 ):
-    """Auth without consuming quota (for /usage, /agent-info)."""
     return await _validate_key(request, api_key, increment=False)
 
-
-# -----------------------------------------------------------------------------
-# 10. Pydantic models
-# -----------------------------------------------------------------------------
 BackendName = Literal["exact", "swstm"]
-
 
 class AddRequest(BaseModel):
     key: str = Field(..., min_length=1, max_length=512)
     value: str = Field(..., min_length=1, max_length=MAX_VALUE_LENGTH)
     entity_id: Optional[str] = Field(None, max_length=128)
 
-
 class ProvisionRequest(BaseModel):
     owner: str = Field(..., min_length=1, max_length=128)
     plan: str = Field(..., min_length=1, max_length=32)
 
+class SignupRequest(BaseModel):
+    owner: str = Field(..., min_length=1, max_length=128)
+    plan: str = Field(default="free", pattern="^(free|agent_free)$")
 
 class AddResponse(BaseModel):
     status: str
     message: str
     backend: str
     remaining: int
-
 
 class GetResponse(BaseModel):
     answers: List[str]
@@ -317,14 +252,12 @@ class GetResponse(BaseModel):
     status: Optional[str] = None
     message: Optional[str] = None
 
-
 class KeyResponse(BaseModel):
     api_key: str
     owner: str
     plan: str
     limit: int
     remaining: int
-
 
 class UsageResponse(BaseModel):
     owner: str
@@ -333,7 +266,6 @@ class UsageResponse(BaseModel):
     limit: int
     remaining: int
 
-
 class VerifyResponse(BaseModel):
     key: str
     status: str
@@ -341,10 +273,6 @@ class VerifyResponse(BaseModel):
     verified: bool
     remaining: int
 
-
-# -----------------------------------------------------------------------------
-# 11. Public endpoints
-# -----------------------------------------------------------------------------
 @app.get("/health")
 async def health():
     return {
@@ -358,13 +286,14 @@ async def health():
         "facts_exact": len(exact) if exact else 0,
     }
 
-
-@app.post("/signup")
+# FIXED: Use JSON body instead of query params for POST
+@app.post("/signup", response_model=KeyResponse)
 async def signup(
     request: Request,
-    owner: str = Query(..., min_length=1, max_length=128),
-    plan: str = Query(default="free", pattern="^(free|agent_free)$"),
+    body: SignupRequest,
 ):
+    owner = body.owner
+    plan = body.plan
     if plan not in SELF_SIGNUP_PLANS:
         raise HTTPException(
             status_code=403,
@@ -384,11 +313,16 @@ async def signup(
         remaining=key_info["quota_limit"] - key_info["usage"],
     )
 
+# Keep backward compat for old clients that send ?owner=&plan=
+@app.get("/signup", response_model=KeyResponse)
+async def signup_get(
+    request: Request,
+    owner: str = Query(..., min_length=1, max_length=128),
+    plan: str = Query(default="free", pattern="^(free|agent_free)$"),
+):
+    return await signup(request, SignupRequest(owner=owner, plan=plan))
 
-# -----------------------------------------------------------------------------
-# 12. Protected endpoints
-# -----------------------------------------------------------------------------
-@app.get("/usage")
+@app.get("/usage", response_model=UsageResponse)
 async def usage(key_info: dict = Depends(validate_api_key_no_count)):
     return UsageResponse(
         owner=key_info["owner"],
@@ -397,7 +331,6 @@ async def usage(key_info: dict = Depends(validate_api_key_no_count)):
         limit=key_info["quota_limit"],
         remaining=key_info["quota_limit"] - key_info["usage"],
     )
-
 
 def _exact_add(mem, key, value):
     if hasattr(mem, "put"):
@@ -412,7 +345,6 @@ def _exact_add(mem, key, value):
         return mem.add(key, value)
     raise RuntimeError("ExactMemory has neither put() nor add()")
 
-
 def _exact_get(mem, key):
     if hasattr(mem, "get_with_status"):
         return mem.get_with_status(key)
@@ -421,11 +353,10 @@ def _exact_get(mem, key):
         return val, ("ok" if val is not None else "missing")
     raise RuntimeError("ExactMemory has no get()")
 
-
 @app.post("/add", response_model=AddResponse)
 async def add_fact(
     add_req: AddRequest,
-    backend: BackendName = "exact",
+    backend: BackendName = Query(default="exact"),
     key_info: dict = Depends(validate_api_key),
 ):
     try:
@@ -454,12 +385,11 @@ async def add_fact(
         logger.exception("Error in /add")
         raise HTTPException(status_code=500, detail="Internal server error")
 
-
 @app.get("/get", response_model=GetResponse)
 async def get_fact(
     key: str = Query(..., min_length=1, max_length=512),
     top_k: int = Query(default=1, ge=1, le=100),
-    backend: BackendName = "exact",
+    backend: BackendName = Query(default="exact"),
     key_info: dict = Depends(validate_api_key),
 ):
     try:
@@ -505,10 +435,6 @@ async def get_fact(
         logger.exception("Error in /get")
         raise HTTPException(status_code=500, detail="Internal server error")
 
-
-# -----------------------------------------------------------------------------
-# 13. Compliance endpoints
-# -----------------------------------------------------------------------------
 @app.get("/verify", response_model=VerifyResponse)
 async def verify(
     key: str = Query(..., min_length=1, max_length=512),
@@ -529,7 +455,6 @@ async def verify(
         logger.exception("Error in /verify")
         raise HTTPException(status_code=500, detail="Internal server error")
 
-
 @app.post("/exact/add")
 async def add_exact(
     add_req: AddRequest,
@@ -538,7 +463,6 @@ async def add_exact(
     mem = get_exact_memory()
     _exact_add(mem, add_req.key, add_req.value)
     return {"status": "ok", "remaining": get_remaining_usage(key_info["key_id"])}
-
 
 @app.get("/exact/get")
 async def exact_get_endpoint(
@@ -554,7 +478,6 @@ async def exact_get_endpoint(
         )
     return {"answer": value, "status": status, "remaining": remaining}
 
-
 @app.get("/agent-info")
 async def agent_info(
     request: Request,
@@ -569,20 +492,14 @@ async def agent_info(
         else None,
     }
 
-
-# -----------------------------------------------------------------------------
-# 14. Admin endpoints
-# -----------------------------------------------------------------------------
 def _require_admin(admin_key: str) -> None:
     if not ADMIN_KEY:
         raise HTTPException(
             status_code=503, detail="Admin endpoints not configured"
         )
     if not secrets.compare_digest(admin_key, ADMIN_KEY):
-        # Log failed attempts (do not echo the key).
         logger.warning("Failed admin auth attempt")
         raise HTTPException(status_code=403, detail="Invalid admin key")
-
 
 @app.get("/admin/keys")
 async def list_keys(admin_key: str = Header(..., alias="admin-key")):
@@ -590,8 +507,7 @@ async def list_keys(admin_key: str = Header(..., alias="admin-key")):
     logger.info("Admin: list_keys")
     return db.list_all_keys()
 
-
-@app.post("/admin/provision")
+@app.post("/admin/provision", response_model=KeyResponse)
 async def admin_provision(
     req: ProvisionRequest,
     admin_key: str = Header(..., alias="admin-key"),
@@ -612,7 +528,6 @@ async def admin_provision(
         remaining=key_info["quota_limit"] - key_info["usage"],
     )
 
-
 @app.post("/admin/revoke/{key_id}")
 async def revoke_key(
     key_id: str,
@@ -625,10 +540,6 @@ async def revoke_key(
         raise HTTPException(status_code=404, detail="No such key_id")
     return {"status": "ok", "message": f"Key {key_id} revoked"}
 
-
-# -----------------------------------------------------------------------------
-# 15. Run
-# -----------------------------------------------------------------------------
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 8000))
     uvicorn.run(app, host="0.0.0.0", port=port, workers=1)
