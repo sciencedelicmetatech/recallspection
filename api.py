@@ -1,264 +1,255 @@
 import os
-import json
 import logging
-import sqlite3
 import secrets
-import hmac
 import hashlib
+import time
+from collections import defaultdict, deque
 from contextlib import asynccontextmanager
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Literal
 
-from fastapi import FastAPI, HTTPException, Header, Depends, Request
+from fastapi import FastAPI, HTTPException, Header, Depends, Request, Query
 from fastapi.security import APIKeyHeader
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, Field
 import uvicorn
 
-# -----------------------------------------------------------------------------
-# 1. Logging & Environment Variables
-# -----------------------------------------------------------------------------
+import db
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("recallspection-api")
 
-MEMORY_FILE = os.getenv("RECALLSPECTION_MEMORY_FILE", "memory.json")
-SWSTM_FILE = os.getenv("RECALLSPECTION_SWSTM_FILE", "swstm.pt")
-DB_FILE = os.getenv("RECALLSPECTION_DB_FILE", "keys.db")
 SWSTM_MODE = os.getenv("SWSTM_MODE", "flat")
+ADMIN_KEY = os.getenv("RECALLSPECTION_ADMIN_KEY")
+SELF_SIGNUP_PLANS = {"free", "agent_free"}
+MAX_VALUE_LENGTH = 100_000
 
-ADMIN_KEY_ENV = "RECALLSPECTION_ADMIN_KEY"
-SIGNUP_SECRET_ENV = "RECALLSPECTION_SIGNUP_SECRET"
-EXACT_SECRET_ENV = "RECALLSPECTION_EXACT_SECRET"
+RATE_WINDOW_SECONDS = 60
+RATE_MAX_REQUESTS = 120
 
-AUTO_SAVE_INTERVAL = int(os.getenv("AUTO_SAVE_INTERVAL", "100"))
-write_counter = 0
+def _client_ip(request: Request) -> str:
+    xff = request.headers.get("x-forwarded-for", "")
+    if xff:
+        return xff.split(",")[-1].strip()
+    return request.client.host if request.client else "unknown"
 
-# -----------------------------------------------------------------------------
-# 2. Database: API Keys & Usage Tracking
-# -----------------------------------------------------------------------------
-def get_db():
-    conn = sqlite3.connect(DB_FILE)
-    conn.row_factory = sqlite3.Row
-    return conn
-
-def init_db():
-    conn = get_db()
-    conn.execute('''
-        CREATE TABLE IF NOT EXISTS api_keys (
-            key_id TEXT PRIMARY KEY,
-            owner TEXT NOT NULL,
-            plan TEXT NOT NULL,
-            usage INTEGER DEFAULT 0,
-            `limit` INTEGER DEFAULT 1000,
-            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-            last_used TEXT,
-            is_active INTEGER DEFAULT 1
-        )
-    ''')
-    conn.execute('CREATE INDEX IF NOT EXISTS idx_key_id ON api_keys(key_id)')
-    conn.commit()
-    conn.close()
+LIMIT_MAP = {
+    "free": 1000, "pro": 100000, "enterprise": 1000000,
+    "agent_free": 5000, "agent_pro": 500000, "agent_enterprise": 5000000,
+}
 
 def create_api_key(owner: str, plan: str = "free") -> str:
     key = f"rk_{secrets.token_urlsafe(24)}"
-    limit_map = {
-        "free": 1000, "pro": 100000, "enterprise": 1000000,
-        "agent_free": 5000, "agent_pro": 500000, "agent_enterprise": 5000000,
-    }
-    limit = limit_map.get(plan, 1000)
-    
-    conn = get_db()
-    conn.execute(
-        "INSERT INTO api_keys (key_id, owner, plan, `limit`) VALUES (?, ?, ?, ?)",
-        (key, owner, plan, limit)
-    )
-    conn.commit()
-    conn.close()
+    limit = LIMIT_MAP.get(plan, 1000)
+    db.insert_api_key(db.hash_api_key(key), owner, plan, limit)
     return key
 
 def get_key_info(key: str) -> Optional[Dict[str, Any]]:
-    conn = get_db()
-    row = conn.execute(
-        "SELECT * FROM api_keys WHERE key_id = ? AND is_active = 1", (key,)
-    ).fetchone()
-    conn.close()
-    return dict(row) if row else None
-
-def increment_usage(key: str) -> int:
-    conn = get_db()
-    conn.execute(
-        "UPDATE api_keys SET usage = usage + 1, last_used = CURRENT_TIMESTAMP WHERE key_id = ?", (key,)
-    )
-    conn.commit()
-    row = conn.execute("SELECT usage, `limit` FROM api_keys WHERE key_id = ?", (key,)).fetchone()
-    conn.close()
-    return row[0] if row else 0
+    return db.fetch_key_info(db.hash_api_key(key))
 
 def get_remaining_usage(key: str) -> int:
-    conn = get_db()
-    row = conn.execute("SELECT `limit`, usage FROM api_keys WHERE key_id = ?", (key,)).fetchone()
-    conn.close()
-    return (row[0] - row[1]) if row else 0
+    return db.fetch_remaining(db.hash_api_key(key))
 
-# -----------------------------------------------------------------------------
-# 3. Memory Engine Initialization & Persistence (v3.0.0 Integration)
-# -----------------------------------------------------------------------------
+def check_and_log_signup(ip: str, max_per_day: int = 3) -> bool:
+    return db.check_and_log_signup(ip, max_per_day)
+
 swstm = None
 exact = None
-EXACT_LOG_FILE = os.getenv("RECALLSPECTION_EXACT_LOG", "transparency.log")
-
-def get_exact_keys() -> Dict[str, bytes]:
-    """Derives the required key dictionary from a single environment secret."""
-    raw = os.getenv(EXACT_SECRET_ENV)
-    if not raw:
-        logger.warning(f"{EXACT_SECRET_ENV} not set. Using ephemeral keys. Persistence will break on restart.")
-        raw = secrets.token_hex(32)
-    
-    # Deterministically derive the agent key and container key from the master secret
-    base = hashlib.sha256(raw.encode()).digest()
-    return {
-        'agent_key': base,
-        'container': hashlib.sha256(b"container-salt-" + base).digest()
-    }
 
 def get_exact_memory():
     global exact
     if exact is None:
-        # Import from the standalone package
-        from exactmemory import ExactMemory 
-        
-        keys = get_exact_keys()
-        exact = ExactMemory(
-            keys=keys, 
-            container_key_id='container',
-            require_log=True, 
-            log_path=EXACT_LOG_FILE
-        )
-        logger.info("ExactMemory v3.0.0 initialized with transparency log")
+        try:
+            from exactmemory_recallspection import ExactMemory
+        except ImportError:
+            from recallspection.exact import ExactMemory
+        try:
+            exact = ExactMemory()
+        except TypeError:
+            keys = {
+                "agent_key": hashlib.sha256(b"recallspection-agent").digest(),
+                "container": hashlib.sha256(b"recallspection-container").digest(),
+            }
+            exact = ExactMemory(
+                keys=keys, container_key_id="container", require_log=False
+            )
+        logger.info(f"ExactMemory initialized: {type(exact).__name__}")
     return exact
 
 def get_swstm():
     global swstm
     if swstm is None:
         from recallspection.swstm import SWSTMEngine
-        swstm = SWSTMEngine(mode=SWSTM_MODE, flat_num_slots=2000)
+        swstm = SWSTMEngine(mode=SWSTM_MODE, flat_num_slots=200)
         logger.info(f"SWSTMEngine initialized (mode={SWSTM_MODE})")
     return swstm
 
 def save_memory():
+    data = {}
     try:
         if exact is not None:
-            exact.save(MEMORY_FILE) # v3.0.0 handles atomic writes and logging internally
-            logger.info(f"ExactMemory saved to {MEMORY_FILE}")
-            
+            if hasattr(exact, "export_state"):
+                data["exact"] = exact.export_state()
+            elif hasattr(exact, "_storage"):
+                data["exact"] = {
+                    k: (
+                        v[0].hex() if isinstance(v[0], (bytes, bytearray)) else v[0],
+                        v[1].hex() if isinstance(v[1], (bytes, bytearray)) else v[1],
+                    )
+                    for k, v in exact._storage.items()
+                }
         if swstm is not None:
-            tmp_swstm = SWSTM_FILE + ".tmp"
-            swstm.save(tmp_swstm)
-            os.replace(tmp_swstm, SWSTM_FILE)
-            logger.info(f"SWSTM saved to {SWSTM_FILE}")
-            
-    except Exception as e:
-        logger.error(f"Failed to save memory: {e}")
+            data["swstm_key_to_value"] = getattr(swstm, "key_to_value", {})
+            data["swstm_entity_of"] = getattr(swstm, "_entity_of", {})
+            data["swstm_timestamp_of"] = getattr(swstm, "_timestamp_of", {})
+        db.save_memory_snapshot(data)
+        logger.info("Memory snapshot saved")
+    except Exception:
+        logger.exception("Failed to save memory")
 
 def load_memory():
     global exact, swstm
     try:
-        if os.path.exists(MEMORY_FILE):
-            mem = get_exact_memory()
-            keys = get_exact_keys()
-            mem.load(MEMORY_FILE, keys) # v3.0.0 verifies MAC, log chain, and rollbacks
-            logger.info(f"Loaded ExactMemory with {len(mem)} active facts.")
-                
-        if os.path.exists(SWSTM_FILE):
-            mem = get_swstm()
-            mem.load(SWSTM_FILE)
-            logger.info(f"Loaded SWSTM with {mem.fact_count} facts.")
-            
-    except Exception as e:
-        logger.critical(f"Failed to load memory (Possible Tampering/Rollback): {e}")
+        data = db.load_memory_snapshot()
+        if not data:
+            logger.info("No memory snapshot found, starting fresh.")
+            return
+        if "exact" in data:
+            exact = get_exact_memory()
+            if hasattr(exact, "load_state"):
+                exact.load_state(data["exact"])
+        if "swstm_key_to_value" in data:
+            swstm = get_swstm()
+            swstm.key_to_value = data["swstm_key_to_value"]
+            swstm._entity_of = data.get("swstm_entity_of", {})
+            swstm._timestamp_of = data.get("swstm_timestamp_of", {})
+        logger.info("Memory snapshot loaded")
+    except Exception:
+        logger.exception("Failed to load memory")
 
-# -----------------------------------------------------------------------------
-# 4. FastAPI App Lifecycle
-# -----------------------------------------------------------------------------
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    init_db()
-    get_exact_memory() 
-    get_swstm()        
+    db.init_db()
     load_memory()
     logger.info("Recallspection API started")
     yield
     save_memory()
+    db.close_db()
     logger.info("Recallspection API shutting down")
 
 app = FastAPI(
     title="Recallspection API",
-    description="Legendary Dual-core exact memory with API keys, usage tracking, and agent detection",
-    version="18.1.0-legendary",
+    description="Dual-core exact memory with API keys, usage tracking, and agent detection",
+    version="18.2.0",
     lifespan=lifespan,
 )
 
-# -----------------------------------------------------------------------------
-# 5. Auth & Security
-# -----------------------------------------------------------------------------
+os.makedirs("static", exist_ok=True)
+app.mount("/static", StaticFiles(directory="static", html=False), name="static")
+
+_rate_buckets: Dict[str, deque] = defaultdict(deque)
+
+@app.middleware("http")
+async def rate_limit_middleware(request: Request, call_next):
+    if request.url.path == "/health":
+        return await call_next(request)
+    ip = _client_ip(request)
+    now = time.time()
+    bucket = _rate_buckets[ip]
+    while bucket and bucket[0] < now - RATE_WINDOW_SECONDS:
+        bucket.popleft()
+    if len(bucket) >= RATE_MAX_REQUESTS:
+        return JSONResponse(
+            status_code=429,
+            content={"detail": "Rate limit exceeded. Try again shortly."},
+        )
+    bucket.append(now)
+    return await call_next(request)
+
+@app.get("/", response_class=HTMLResponse)
+async def root():
+    try:
+        with open("index.html", "r") as f:
+            return f.read()
+    except FileNotFoundError:
+        return {"error": "index.html not found"}
+
 api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
 
 def is_agent_request(request: Request) -> bool:
     user_agent = request.headers.get("user-agent", "").lower()
-    agent_patterns = [
-        "python", "curl", "wget", "requests", "langchain", "llamaindex",
-        "openai", "anthropic", "cohere", "mistral", "transformers",
-        "pytorch", "tensorflow", "jupyter", "colab", "bot", "spider"
-    ]
-    return any(pattern in user_agent for pattern in agent_patterns)
+    for pattern in [
+        "python", "curl", "wget", "requests", "langchain",
+        "llamaindex", "openai", "anthropic", "cohere",
+        "transformers", "jupyter", "colab", "bot", "spider",
+    ]:
+        if pattern in user_agent:
+            return True
+    return "colab" in request.headers.get("referer", "").lower()
 
-def validate_api_key(request: Request, api_key: str = Depends(api_key_header)):
+async def _validate_key(request: Request, api_key: str, increment: bool):
     if api_key is None:
-        raise HTTPException(status_code=401, detail="Missing API Key. Please provide X-API-Key header.")
-        
-    key_info = get_key_info(api_key)
+        raise HTTPException(status_code=401, detail="Missing X-API-Key header.")
+    key_hash = db.hash_api_key(api_key)
+    key_info = db.fetch_key_info(key_hash)
     if key_info is None:
-        raise HTTPException(status_code=403, detail="Invalid API Key or key deactivated.")
-        
-    remaining = get_remaining_usage(api_key)
-    if remaining <= 0:
         raise HTTPException(
-            status_code=402,
-            detail=f"Usage limit exceeded. Plan: {key_info['plan']}, Used: {key_info['usage']}, Limit: {key_info['limit']}."
+            status_code=403, detail="Invalid API Key or key deactivated."
         )
-        
-    increment_usage(api_key)
+    if increment:
+        new_usage = db.consume_usage(key_hash)
+        if new_usage is None:
+            raise HTTPException(
+                status_code=402,
+                detail=(
+                    f"Usage limit exceeded. Plan: {key_info['plan']}, "
+                    f"Limit: {key_info['quota_limit']}."
+                ),
+            )
+        key_info["usage"] = new_usage
     request.state.key_info = key_info
+    request.state.api_key = api_key
     request.state.is_agent = is_agent_request(request)
     return key_info
 
-def require_admin(admin_key: str = Header(None, alias="X-Admin-Key")):
-    expected = os.getenv(ADMIN_KEY_ENV)
-    if not expected:
-        raise HTTPException(status_code=503, detail="Admin API disabled: Admin key not configured on server.")
-        
-    if admin_key is None or not hmac.compare_digest(admin_key, expected):
-        raise HTTPException(status_code=403, detail="Invalid admin key")
-        
-    return {"admin": True}
+async def validate_api_key(
+    request: Request,
+    api_key: str = Depends(api_key_header),
+):
+    return await _validate_key(request, api_key, increment=True)
 
-# -----------------------------------------------------------------------------
-# 6. Pydantic Models
-# -----------------------------------------------------------------------------
+async def validate_api_key_no_count(
+    request: Request,
+    api_key: str = Depends(api_key_header),
+):
+    return await _validate_key(request, api_key, increment=False)
+
+BackendName = Literal["exact", "swstm"]
+
 class AddRequest(BaseModel):
-    key: str = Field(..., max_length=2048, description="Max 2KB key")
-    value: str = Field(..., max_length=65536, description="Max 64KB value")
+    key: str = Field(..., min_length=1, max_length=512)
+    value: str = Field(..., min_length=1, max_length=MAX_VALUE_LENGTH)
+    entity_id: Optional[str] = Field(None, max_length=128)
+
+class ProvisionRequest(BaseModel):
+    owner: str = Field(..., min_length=1, max_length=128)
+    plan: str = Field(..., min_length=1, max_length=32)
+
+class SignupRequest(BaseModel):
+    owner: str = Field(..., min_length=1, max_length=128)
+    plan: str = Field(default="free", pattern="^(free|agent_free)$")
 
 class AddResponse(BaseModel):
     status: str
     message: str
-    backend: str = "swstm"
+    backend: str
     remaining: int
 
 class GetResponse(BaseModel):
     answers: List[str]
-    backend: str = "swstm"
+    backend: str
     remaining: int
+    status: Optional[str] = None
     message: Optional[str] = None
 
 class KeyResponse(BaseModel):
@@ -275,233 +266,280 @@ class UsageResponse(BaseModel):
     limit: int
     remaining: int
 
-# -----------------------------------------------------------------------------
-# 7. Public Routes & Static Files
-# -----------------------------------------------------------------------------
-@app.get("/", response_class=HTMLResponse)
-def root():
-    try:
-        with open("index.html", "r") as f:
-            return f.read()
-    except FileNotFoundError:
-        return {"message": "Recallspection API is running. Legend mode active."}
-
-app.mount("/static", StaticFiles(directory=".", html=True), name="static")
+class VerifyResponse(BaseModel):
+    key: str
+    status: str
+    value: Optional[str]
+    verified: bool
+    remaining: int
 
 @app.get("/health")
-def health():
-    exact_mem = get_exact_memory() if exact is not None else None
-    swstm_mem = get_swstm() if swstm is not None else None
-    
+async def health():
     return {
         "status": "healthy",
-        "version": "18.1.0-legendary",
-        "backend": "SWSTM Legendary + ExactMemory",
-        "swstm_loaded": swstm_mem is not None,
-        "exact_loaded": exact_mem is not None,
-        "facts_swstm": swstm_mem.fact_count if swstm_mem else 0,
-        "facts_exact": len(exact_mem) if exact_mem else 0,
-        "db_connected": os.path.exists(DB_FILE),
+        "version": "18.2.0",
+        "backend": "ExactMemory v3 + SWSTM v7.0",
+        "storage": "Postgres" if db.USE_POSTGRES else "SQLite",
+        "swstm_loaded": swstm is not None,
+        "exact_loaded": exact is not None,
+        "facts_swstm": getattr(swstm, "fact_count", 0) if swstm else 0,
+        "facts_exact": len(exact) if exact else 0,
     }
 
-@app.post("/signup")
-def signup(
-    owner: str = Field(..., max_length=256), 
-    plan: str = "free", 
-    signup_secret: str = Header(None, alias="X-Signup-Secret")
+# FIXED: Use JSON body instead of query params for POST
+@app.post("/signup", response_model=KeyResponse)
+async def signup(
+    request: Request,
+    body: SignupRequest,
 ):
-    expected_secret = os.getenv(SIGNUP_SECRET_ENV)
-    if expected_secret:
-        if signup_secret is None or not hmac.compare_digest(signup_secret, expected_secret):
-            raise HTTPException(status_code=403, detail="Signup requires a valid invite secret.")
-            
-    valid_plans = ["free", "pro", "enterprise", "agent_free", "agent_pro", "agent_enterprise"]
-    if plan not in valid_plans:
-        raise HTTPException(status_code=400, detail=f"Invalid plan. Choose from: {valid_plans}")
-        
+    owner = body.owner
+    plan = body.plan
+    if plan not in SELF_SIGNUP_PLANS:
+        raise HTTPException(
+            status_code=403,
+            detail=f"Plan '{plan}' requires admin provisioning. "
+                   f"Self-signup available: {sorted(SELF_SIGNUP_PLANS)}",
+        )
+    client_ip = _client_ip(request)
+    if not check_and_log_signup(client_ip):
+        raise HTTPException(status_code=429, detail="Too many signups today.")
     key = create_api_key(owner, plan)
     key_info = get_key_info(key)
-    
     return KeyResponse(
         api_key=key,
         owner=key_info["owner"],
         plan=key_info["plan"],
-        limit=key_info["limit"],
-        remaining=key_info["limit"] - key_info["usage"],
+        limit=key_info["quota_limit"],
+        remaining=key_info["quota_limit"] - key_info["usage"],
     )
 
-# -----------------------------------------------------------------------------
-# 8. Protected Memory Routes
-# -----------------------------------------------------------------------------
-@app.get("/usage")
-def usage(key_info: dict = Depends(validate_api_key)):
+# Keep backward compat for old clients that send ?owner=&plan=
+@app.get("/signup", response_model=KeyResponse)
+async def signup_get(
+    request: Request,
+    owner: str = Query(..., min_length=1, max_length=128),
+    plan: str = Query(default="free", pattern="^(free|agent_free)$"),
+):
+    return await signup(request, SignupRequest(owner=owner, plan=plan))
+
+@app.get("/usage", response_model=UsageResponse)
+async def usage(key_info: dict = Depends(validate_api_key_no_count)):
     return UsageResponse(
         owner=key_info["owner"],
         plan=key_info["plan"],
         used=key_info["usage"],
-        limit=key_info["limit"],
-        remaining=key_info["limit"] - key_info["usage"],
+        limit=key_info["quota_limit"],
+        remaining=key_info["quota_limit"] - key_info["usage"],
     )
 
+def _exact_add(mem, key, value):
+    if hasattr(mem, "put"):
+        try:
+            import inspect
+            if "key_id" in inspect.signature(mem.put).parameters:
+                return mem.put(key, value, key_id="agent_key")
+        except (ValueError, TypeError):
+            pass
+        return mem.put(key, value)
+    if hasattr(mem, "add"):
+        return mem.add(key, value)
+    raise RuntimeError("ExactMemory has neither put() nor add()")
+
+def _exact_get(mem, key):
+    if hasattr(mem, "get_with_status"):
+        return mem.get_with_status(key)
+    if hasattr(mem, "get"):
+        val = mem.get(key)
+        return val, ("ok" if val is not None else "missing")
+    raise RuntimeError("ExactMemory has no get()")
+
 @app.post("/add", response_model=AddResponse)
-def add_fact(
-    request: Request,
+async def add_fact(
     add_req: AddRequest,
-    backend: str = "swstm",
+    backend: BackendName = Query(default="exact"),
     key_info: dict = Depends(validate_api_key),
 ):
-    global write_counter
     try:
-        remaining = get_remaining_usage(key_info["key_id"])
-        
         if backend == "exact":
-            from exactmemory import TamperError
             mem = get_exact_memory()
-            try:
-                mem.put(add_req.key, add_req.value, key_id='agent_key')
-            except TamperError:
-                 raise HTTPException(status_code=409, detail="Tamper detected during write.")
-            msg = "Added to ExactMemory (Tamper-Evident)"
-            b_end = "exact"
-        else:
-            mem = get_swstm()
-            slot_idx = mem.add(add_req.key, add_req.value)
-            msg = f"Added to SWSTM slot {slot_idx}"
-            b_end = "swstm"
-            
-        write_counter += 1
-        if write_counter >= AUTO_SAVE_INTERVAL:
-            save_memory()
-            write_counter = 0
-            
-        return AddResponse(status="ok", message=msg, backend=b_end, remaining=remaining)
-            
-    except Exception as e:
+            _exact_add(mem, add_req.key, add_req.value)
+            return AddResponse(
+                status="ok",
+                message="Added to ExactMemory",
+                backend="exact",
+                remaining=get_remaining_usage(key_info["key_id"]),
+            )
+        mem = get_swstm()
+        result = mem.add(add_req.key, add_req.value, entity_id=add_req.entity_id)
+        return AddResponse(
+            status="ok",
+            message=str(result),
+            backend="swstm",
+            remaining=get_remaining_usage(key_info["key_id"]),
+        )
+    except ImportError as e:
+        raise HTTPException(
+            status_code=503, detail=f"Backend '{backend}' unavailable: {e}"
+        )
+    except Exception:
         logger.exception("Error in /add")
-        raise HTTPException(status_code=500, detail="Internal server error during memory write.")
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 @app.get("/get", response_model=GetResponse)
-def get_fact(
-    request: Request,
-    key: str,
-    top_k: int = 1,
-    backend: str = "swstm",
+async def get_fact(
+    key: str = Query(..., min_length=1, max_length=512),
+    top_k: int = Query(default=1, ge=1, le=100),
+    backend: BackendName = Query(default="exact"),
     key_info: dict = Depends(validate_api_key),
 ):
     try:
-        remaining = get_remaining_usage(key_info["key_id"])
-        
         if backend == "exact":
-            from exactmemory import TamperError
             mem = get_exact_memory()
-            try:
-                result = mem.get(key, raise_on_tampered=True)
-            except TamperError:
-                raise HTTPException(status_code=409, detail="Tamper detected: record integrity compromised.")
-                
-            if result is not None:
-                return GetResponse(answers=[str(result)], backend="exact", remaining=remaining)
-            return GetResponse(answers=[], backend="exact", remaining=remaining, message="Not found")
-            
-        else:
-            mem = get_swstm()
-            results = mem.get(key, top_k=top_k)
-            if results:
-                return GetResponse(answers=results, backend="swstm", remaining=remaining)
-            return GetResponse(answers=[], backend="swstm", remaining=remaining, message="No match")
-            
-    except Exception as e:
+            value, status = _exact_get(mem, key)
+            remaining = get_remaining_usage(key_info["key_id"])
+            if status == "ok":
+                return GetResponse(
+                    answers=[str(value)],
+                    backend="exact",
+                    remaining=remaining,
+                    status="ok",
+                )
+            if status == "tampered":
+                raise HTTPException(
+                    status_code=409, detail="Tamper detected on stored value."
+                )
+            return GetResponse(
+                answers=[],
+                backend="exact",
+                remaining=remaining,
+                status="missing",
+                message="Not found",
+            )
+        mem = get_swstm()
+        results = mem.get(key, top_k=top_k)
+        remaining = get_remaining_usage(key_info["key_id"])
+        if results:
+            return GetResponse(
+                answers=list(results), backend="swstm", remaining=remaining
+            )
+        return GetResponse(
+            answers=[], backend="swstm", remaining=remaining, message="No match"
+        )
+    except HTTPException:
+        raise
+    except ImportError as e:
+        raise HTTPException(
+            status_code=503, detail=f"Backend '{backend}' unavailable: {e}"
+        )
+    except Exception:
         logger.exception("Error in /get")
-        raise HTTPException(status_code=500, detail="Internal server error during memory retrieval.")
+        raise HTTPException(status_code=500, detail="Internal server error")
 
-# -----------------------------------------------------------------------------
-# 9. Exact Memory Dedicated Routes
-# -----------------------------------------------------------------------------
+@app.get("/verify", response_model=VerifyResponse)
+async def verify(
+    key: str = Query(..., min_length=1, max_length=512),
+    key_info: dict = Depends(validate_api_key),
+):
+    try:
+        mem = get_exact_memory()
+        value, status = _exact_get(mem, key)
+        remaining = get_remaining_usage(key_info["key_id"])
+        return VerifyResponse(
+            key=key,
+            status=status,
+            value=str(value) if value is not None else None,
+            verified=(status == "ok"),
+            remaining=remaining,
+        )
+    except Exception:
+        logger.exception("Error in /verify")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
 @app.post("/exact/add")
-def add_exact_endpoint(
-    request: Request,
+async def add_exact(
     add_req: AddRequest,
     key_info: dict = Depends(validate_api_key),
 ):
-    global write_counter
-    from exactmemory import TamperError
     mem = get_exact_memory()
-    try:
-        mem.put(add_req.key, add_req.value, key_id='agent_key')
-    except TamperError:
-        raise HTTPException(status_code=409, detail="Tamper detected during write.")
-        
-    remaining = get_remaining_usage(key_info["key_id"])
-    
-    write_counter += 1
-    if write_counter >= AUTO_SAVE_INTERVAL:
-        save_memory()
-        write_counter = 0
-        
-    return {"status": "ok", "remaining": remaining}
+    _exact_add(mem, add_req.key, add_req.value)
+    return {"status": "ok", "remaining": get_remaining_usage(key_info["key_id"])}
 
 @app.get("/exact/get")
-def get_exact_endpoint(
-    request: Request,
-    key: str,
+async def exact_get_endpoint(
+    key: str = Query(..., min_length=1, max_length=512),
     key_info: dict = Depends(validate_api_key),
 ):
-    from exactmemory import TamperError
     mem = get_exact_memory()
+    value, status = _exact_get(mem, key)
     remaining = get_remaining_usage(key_info["key_id"])
-    
-    try:
-        result = mem.get(key, raise_on_tampered=True)
-    except TamperError:
-        raise HTTPException(status_code=409, detail="Tamper detected: record integrity compromised.")
-        
-    if result is not None:
-        return {"answer": result, "remaining": remaining}
-    return {"answer": None, "remaining": remaining, "message": "Not found"}
+    if status == "tampered":
+        raise HTTPException(
+            status_code=409, detail="Tamper detected on stored value."
+        )
+    return {"answer": value, "status": status, "remaining": remaining}
 
 @app.get("/agent-info")
-def agent_info(request: Request, key_info: dict = Depends(validate_api_key)):
-    is_agent = request.state.is_agent
+async def agent_info(
+    request: Request,
+    key_info: dict = Depends(validate_api_key_no_count),
+):
     return {
-        "is_agent": is_agent,
+        "is_agent": request.state.is_agent,
         "plan": key_info["plan"],
         "remaining": get_remaining_usage(key_info["key_id"]),
-        "suggestion": "Consider upgrading to agent plan for higher limits." if is_agent and key_info["plan"].startswith("free") else None,
+        "suggestion": "Consider an agent plan for higher limits."
+        if request.state.is_agent and key_info["plan"].startswith("free")
+        else None,
     }
 
-# -----------------------------------------------------------------------------
-# 10. Admin Routes
-# -----------------------------------------------------------------------------
+def _require_admin(admin_key: str) -> None:
+    if not ADMIN_KEY:
+        raise HTTPException(
+            status_code=503, detail="Admin endpoints not configured"
+        )
+    if not secrets.compare_digest(admin_key, ADMIN_KEY):
+        logger.warning("Failed admin auth attempt")
+        raise HTTPException(status_code=403, detail="Invalid admin key")
+
 @app.get("/admin/keys")
-def list_keys(admin: dict = Depends(require_admin)):
-    conn = get_db()
-    rows = conn.execute("SELECT key_id, owner, plan, usage, `limit`, created_at, last_used, is_active FROM api_keys").fetchall()
-    conn.close()
-    return [dict(row) for row in rows]
+async def list_keys(admin_key: str = Header(..., alias="admin-key")):
+    _require_admin(admin_key)
+    logger.info("Admin: list_keys")
+    return db.list_all_keys()
+
+@app.post("/admin/provision", response_model=KeyResponse)
+async def admin_provision(
+    req: ProvisionRequest,
+    admin_key: str = Header(..., alias="admin-key"),
+):
+    _require_admin(admin_key)
+    if req.plan not in LIMIT_MAP:
+        raise HTTPException(
+            status_code=400, detail=f"Unknown plan: {req.plan}"
+        )
+    logger.info(f"Admin: provision owner={req.owner} plan={req.plan}")
+    key = create_api_key(req.owner, req.plan)
+    key_info = get_key_info(key)
+    return KeyResponse(
+        api_key=key,
+        owner=key_info["owner"],
+        plan=key_info["plan"],
+        limit=key_info["quota_limit"],
+        remaining=key_info["quota_limit"] - key_info["usage"],
+    )
 
 @app.post("/admin/revoke/{key_id}")
-def revoke_key(key_id: str, admin: dict = Depends(require_admin)):
-    conn = get_db()
-    conn.execute("UPDATE api_keys SET is_active = 0 WHERE key_id = ?", (key_id,))
-    conn.commit()
-    conn.close()
+async def revoke_key(
+    key_id: str,
+    admin_key: str = Header(..., alias="admin-key"),
+):
+    _require_admin(admin_key)
+    logger.info(f"Admin: revoke key_id={key_id[:16]}...")
+    ok = db.deactivate_key(key_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="No such key_id")
     return {"status": "ok", "message": f"Key {key_id} revoked"}
 
-@app.post("/admin/save")
-def admin_save(admin: dict = Depends(require_admin)):
-    save_memory()
-    return {"status": "ok", "message": "Memory manually flushed to disk."}
-
-@app.post("/admin/consolidate")
-def admin_consolidate(admin: dict = Depends(require_admin)):
-    mem = get_swstm()
-    mem.consolidate()
-    save_memory()
-    return {"status": "ok", "message": "SWSTM consolidated and saved."}
-
-# -----------------------------------------------------------------------------
-# 11. Run
-# -----------------------------------------------------------------------------
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 8000))
-    uvicorn.run(app, host="0.0.0.0", port=port)
+    uvicorn.run(app, host="0.0.0.0", port=port, workers=1)
