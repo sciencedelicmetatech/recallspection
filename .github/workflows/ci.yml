@@ -1,5 +1,4 @@
 name: CI
-
 on:
   push:
     branches: [ main ]
@@ -12,32 +11,25 @@ jobs:
     strategy:
       matrix:
         python-version: ["3.10", "3.11"]
-
     steps:
     - uses: actions/checkout@v4
-
-    - name: Set up Python ${{ matrix.python-version }}
+    - name: Set up Python
       uses: actions/setup-python@v5
       with:
         python-version: ${{ matrix.python-version }}
-
-    - name: Install dependencies (CI-safe)
+    - name: Install deps (no PyPI yet)
       run: |
         python -m pip install --upgrade pip
-        pip install pytest pytest-cov numpy
-        # Install PyTorch CPU version to keep CI fast and small
+        pip install pytest pytest-cov numpy scikit-learn
         pip install torch --index-url https://download.pytorch.org/whl/cpu
-        # Install main repo requirements
-        pip install -r requirements.txt || true
-        # FIX: Install ExactMemory directly from GitHub (since it's not on PyPI yet)
+        # exactmemory not on PyPI yet - install from your other repo
         pip install git+https://github.com/sciencedelicmetatech/exactmemory.recallspection.git
-        # Install the main repo itself in editable mode
-        pip install -e . || true
-
-    - name: Run pytest
+        pip install -r requirements.txt || true
+        # install THIS repo - must not use || true, let it fail if broken
+        pip install -e .
+    - name: Run YOUR test file
       run: |
-        pytest tests/test_swstm.py -v --cov=recallspection
-
-    - name: Check ExactMemory core loads
+        pytest tests/test_swstm.py -v --tb=short
+    - name: Check import
       run: |
-        python -c "from recallspection import ExactMemory; print('ExactMemory OK')"
+        python -c "from recallspection.swstm import SWSTMEngine; print('OK')"
