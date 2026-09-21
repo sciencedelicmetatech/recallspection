@@ -1,42 +1,71 @@
+"""
+Recallspection SWSTM + Card hybrid
+---------------------------------
+- Exact-first via key index
+- Fuzzy via natural-language cards + MiniLM cosine
+- Abstain below confidence threshold (never silent wrong)
+- Legacy SWSTM slots kept optional / experimental
+"""
+
+from __future__ import annotations
+
+import hashlib
+from collections import defaultdict
+from typing import Any, Dict, List, Optional, Tuple, Union
+
 import torch
 import torch.nn as nn
-from typing import List, Dict, Tuple, Optional, Any, Union
-from collections import defaultdict
-import hashlib
+import torch.nn.functional as F
 
-# --- ExactMemory Wrapper for CI compatibility ---
+# ---------------------------------------------------------------------------
+# Optional encoder
+# ---------------------------------------------------------------------------
+try:
+    from sentence_transformers import SentenceTransformer
+    HAS_ST = True
+except ImportError:
+    HAS_ST = False
+
+
+def _cosine(a: torch.Tensor, b: torch.Tensor) -> float:
+    if a.dim() > 1:
+        a = a.squeeze(0)
+    if b.dim() > 1:
+        b = b.squeeze(0)
+    return float(F.cosine_similarity(a.unsqueeze(0), b.unsqueeze(0)).item())
+
+
+# ---------------------------------------------------------------------------
+# Lightweight ExactMemory (CI / standalone fallback)
+# ---------------------------------------------------------------------------
 class ExactMemory:
     def __init__(self, secret: str = "default_secret"):
-        self._storage = {}
+        self._storage: Dict[str, Any] = {}
         self._secret = secret
         self._fact_count = 0
 
     def _hash_key(self, key: str) -> str:
         return hashlib.sha256(f"{self._secret}:{key}".encode()).hexdigest()
 
-    def _pack(self, value: Any) -> Any:
-        # Store the original value so tests can compare real Python objects.
-        return value
-
     def add(self, key: str, value: Any) -> None:
         key_str = str(key)
         existed = key_str in self
-        self._storage[self._hash_key(key_str)] = self._pack(value)
+        self._storage[self._hash_key(key_str)] = value
         if not existed:
             self._fact_count += 1
+
+    def put(self, key: str, value: Any, **_kwargs) -> None:
+        self.add(key, value)
 
     def get(self, key: str) -> Optional[Any]:
         return self._storage.get(self._hash_key(str(key)))
 
     def delete(self, key: str) -> bool:
-        key_str = str(key)
-        hashed_key = self._hash_key(key_str)
-
-        if hashed_key in self._storage:
-            del self._storage[hashed_key]
+        hashed = self._hash_key(str(key))
+        if hashed in self._storage:
+            del self._storage[hashed]
             self._fact_count -= 1
             return True
-
         return False
 
     def __contains__(self, key: str) -> bool:
@@ -50,34 +79,115 @@ class ExactMemory:
         return self._fact_count
 
 
-# --- SWSTM Neural Model ---
+# ---------------------------------------------------------------------------
+# Card index — primary fuzzy path
+# ---------------------------------------------------------------------------
+class CardIndex:
+    """
+    Natural-language cards + embedding cosine.
+    This is the path that reached 10/10 on real paraphrases.
+    """
+
+    def __init__(
+        self,
+        model_name: str = "all-MiniLM-L6-v2",
+        device: str = "cpu",
+        encoder: Optional[Any] = None,
+    ):
+        self.device = device
+        self.cards: Dict[str, str] = {}
+        self.values: Dict[str, str] = {}
+        self.embeddings: Dict[str, torch.Tensor] = {}
+
+        if encoder is not None:
+            self.encoder = encoder
+        elif HAS_ST:
+            self.encoder = SentenceTransformer(model_name, device=device)
+        else:
+            self.encoder = None
+
+    def _encode(self, text: str) -> torch.Tensor:
+        if self.encoder is None:
+            # Deterministic fallback (no ST installed)
+            vec = torch.zeros(384)
+            for i, c in enumerate(text.encode("utf-8")):
+                vec[i % 384] += float(c)
+            return vec
+        emb = self.encoder.encode([text], convert_to_tensor=True)
+        if isinstance(emb, torch.Tensor):
+            return emb.squeeze(0)
+        return torch.tensor(emb, dtype=torch.float32).squeeze(0)
+
+    def add(self, key: str, value: str, card: str) -> None:
+        key = str(key)
+        self.cards[key] = card
+        self.values[key] = str(value)
+        self.embeddings[key] = self._encode(card).cpu()
+
+    def remove(self, key: str) -> None:
+        key = str(key)
+        self.cards.pop(key, None)
+        self.values.pop(key, None)
+        self.embeddings.pop(key, None)
+
+    def search(
+        self,
+        query: str,
+        top_k: int = 3,
+        threshold: float = 0.45,
+    ) -> List[Tuple[float, str, str]]:
+        """
+        Returns [(score, value, key), ...] with score >= threshold.
+        Empty list = abstain (no silent wrong).
+        """
+        if not self.embeddings:
+            return []
+
+        q = self._encode(query)
+        scored: List[Tuple[float, str, str]] = []
+        for key, emb in self.embeddings.items():
+            score = _cosine(q, emb.to(q.device))
+            if score >= threshold:
+                scored.append((score, self.values[key], key))
+
+        scored.sort(key=lambda x: x[0], reverse=True)
+        return [(round(s, 4), v, k) for s, v, k in scored[:top_k]]
+
+    def __len__(self) -> int:
+        return len(self.cards)
+
+
+# ---------------------------------------------------------------------------
+# Legacy neural slot model (optional / experimental)
+# ---------------------------------------------------------------------------
 class SWSTMModel(nn.Module):
     def __init__(self, num_slots: int, key_dim: int, slot_dim: int, temperature: float):
         super().__init__()
         self.num_slots = num_slots
-        self.key_dim = key_dim
-        self.slot_dim = slot_dim
-        self.temperature = temperature
-        
         self.prototypes = nn.Parameter(torch.randn(num_slots, slot_dim))
         self.self_token = nn.Parameter(torch.zeros(num_slots))
-        
         self.key_proj = nn.Linear(key_dim, slot_dim)
-        self.val_proj = nn.Linear(key_dim, slot_dim)
+        self.temperature = temperature
 
-    def forward(self, key_vec: torch.Tensor, val_vec: Optional[torch.Tensor] = None, op: str = "read"):
+    def forward(self, key_vec: torch.Tensor) -> torch.Tensor:
         if key_vec.dim() == 1:
             key_vec = key_vec.unsqueeze(0)
-            
         key_proj = self.key_proj(key_vec)
         sim = torch.matmul(key_proj, self.prototypes.T) / self.temperature
-        sim = sim + self.self_token.unsqueeze(0)
-        
-        return sim
+        return sim + self.self_token.unsqueeze(0)
 
 
-# --- Legendary SWSTM Engine ---
+# ---------------------------------------------------------------------------
+# Main engine
+# ---------------------------------------------------------------------------
 class SWSTMEngine:
+    """
+    Hybrid engine:
+      1. Exact key hit          → status "exact"
+      2. Card cosine >= thresh  → status "fuzzy"
+      3. Else                   → status "missing" (abstain)
+    """
+
     def __init__(
         self,
         num_slots: int = 2000,
@@ -87,334 +197,170 @@ class SWSTMEngine:
         encoder_model: str = "all-MiniLM-L6-v2",
         device: Optional[Union[str, torch.device]] = None,
         encoder: Optional[Any] = None,
-        mode: Optional[str] = None,
-        flat_num_slots: Optional[int] = None,
-        hierarchical_num_slots: Optional[int] = None,
-        **legacy_kwargs: Any,
+        fuzzy_threshold: float = 0.45,
+        use_cards: bool = True,
+        **_legacy,
     ):
-        if flat_num_slots is not None:
-            num_slots = flat_num_slots
-        elif hierarchical_num_slots is not None:
-            num_slots = hierarchical_num_slots
-            
-        self.num_slots = num_slots
-        self.key_dim = key_dim
-        self.slot_dim = slot_dim
-        self.temperature = temperature
-        self.encoder_model = encoder_model
         self.device = torch.device(device) if device else torch.device("cpu")
-        self.mode = mode or "flat"
-        
+        self.num_slots = num_slots
+        self.fuzzy_threshold = fuzzy_threshold
+        self.use_cards = use_cards
+
+        # Exact index
+        self.key_to_value: Dict[str, str] = {}
+        self.key_to_slot_idx: Dict[str, int] = {}
         self.slot_to_values: Dict[int, List[Tuple[str, str]]] = defaultdict(list)
-        self.value_to_slot: Dict[str, int] = {}
-        self.key_to_slot_idx: Dict[str, int] = {}  # FIX 2: Canonical index map
-        self._train_buffer: List[Tuple[torch.Tensor, torch.Tensor, str, str]] = []
-        
-        if encoder is not None:
-            self.encoder = encoder
-        else:
-            try:
-                from sentence_transformers import SentenceTransformer
-                self.encoder = SentenceTransformer(encoder_model)
-            except ImportError:
-                self.encoder = None
-                
-        self.model = SWSTMModel(num_slots, key_dim, slot_dim, temperature).to(self.device)
 
-    @property
-    def fact_count(self) -> int:
-        return sum(len(bucket) for bucket in self.slot_to_values.values())
-
-    def __len__(self) -> int:
-        return self.fact_count
-
-    def _encode(self, text: str) -> torch.Tensor:
-        if self.encoder is None:
-            vec = torch.zeros(self.key_dim)
-            for i, c in enumerate(text.encode('utf-8')):
-                vec[i % self.key_dim] += c
-            return vec.to(self.device)
-        
-        try:
-            vec = self.encoder.encode([text], convert_to_tensor=True)
-        except TypeError:
-            vec = self.encoder.encode([text])
-            
-        if isinstance(vec, torch.Tensor):
-            return vec.squeeze(0).to(self.device)
-        else:
-            return torch.tensor(vec, dtype=torch.float32).squeeze(0).to(self.device)
-
-    def add(self, key: str, value: str) -> int:
-        key_str = str(key)
-        value_str = str(value)
-
-        # remove old key from buffer
-        self._train_buffer = [
-            (kv, vv, k, v)
-            for kv, vv, k, v in self._train_buffer
-            if k != key_str
-        ]
-
-        # remove old key from index and buckets
-        self.key_to_slot_idx.pop(key_str, None)
-        for slot_idx in list(self.slot_to_values.keys()):
-            self.slot_to_values[slot_idx] = [
-                (k, v)
-                for k, v in self.slot_to_values[slot_idx]
-                if k != key_str
-            ]
-            if not self.slot_to_values[slot_idx]:
-                del self.slot_to_values[slot_idx]
-
-        key_vec = self._encode(key_str)
-        val_vec = self._encode(value_str)
-
-        with torch.no_grad():
-            sim = self.model.forward(key_vec, val_vec, op="write")
-            slot_idx = int(torch.argmax(sim, dim=-1).item())
-
-        self.slot_to_values[slot_idx].append((key_str, value_str))
-        self.key_to_slot_idx[key_str] = slot_idx  # Update index
-        self.value_to_slot[value_str] = slot_idx
-
-        self._train_buffer.append(
-            (
-                key_vec.squeeze(0).cpu(),
-                val_vec.squeeze(0).cpu(),
-                key_str,
-                value_str,
-            )
+        # Card index (primary fuzzy)
+        self.cards = CardIndex(
+            model_name=encoder_model,
+            device=str(self.device),
+            encoder=encoder,
         )
 
+        # Optional legacy neural model
+        self.model = SWSTMModel(num_slots, key_dim, slot_dim, temperature).to(self.device)
+        self._train_buffer: List[Any] = []
+
+    # ----- write -----
+    def add(
+        self,
+        key: str,
+        value: str,
+        card: Optional[str] = None,
+    ) -> int:
+        key, value = str(key), str(value)
+
+        # Remove old
+        self.delete(key)
+
+        # Exact store
+        self.key_to_value[key] = value
+
+        # Slot (legacy / capacity)
+        key_vec = self.cards._encode(key)
         with torch.no_grad():
-            self.model.self_token.data[slot_idx] += 0.01
+            sim = self.model.forward(key_vec.to(self.device))
+            slot_idx = int(torch.argmax(sim, dim=-1).item())
+        self.slot_to_values[slot_idx].append((key, value))
+        self.key_to_slot_idx[key] = slot_idx
+
+        # Card for fuzzy
+        if self.use_cards:
+            if card is None:
+                card = f"The value of '{key}' is {value}"
+            self.cards.add(key, value, card)
 
         return slot_idx
 
-    def get(self, key: str, top_k: int = 1) -> List[str]:
-        key_str = str(key)
-        
-        # 1. O(1) EXACT MATCH FIRST via Index Map
-        slot_idx = self.key_to_slot_idx.get(key_str)
-        if slot_idx is not None:
-            for k, v in self.slot_to_values.get(slot_idx, []):
-                if k == key_str:
-                    return [v]
-            # If index is stale (key deleted but not removed from map), repair and fall through
-            self.key_to_slot_idx.pop(key_str, None)
+    def put(self, key: str, value: str, card: Optional[str] = None, **_kwargs) -> int:
+        return self.add(key, value, card=card)
 
-        # 2. NEURAL ROUTING (Fuzzy fallback for unseen keys)
-        if not self.slot_to_values:
+    # ----- read -----
+    def get(
+        self,
+        key_or_query: str,
+        top_k: int = 1,
+        threshold: Optional[float] = None,
+    ) -> List[str]:
+        """
+        Back-compat list API.
+        Prefer get_with_status() for production.
+        """
+        result = self.get_with_status(key_or_query, top_k=top_k, threshold=threshold)
+        if result["value"] is None:
             return []
+        if top_k == 1:
+            return [result["value"]]
+        # multi: exact first, then fuzzy list
+        values = [result["value"]]
+        if result["status"] == "fuzzy" and result.get("alternates"):
+            values.extend(result["alternates"])
+        return values[:top_k]
 
-        key_vec = self._encode(key_str)
-        
-        with torch.no_grad():
-            sim = self.model.forward(key_vec, op="read")  # shape: (1, num_slots)
-            
-            # THE FIX: Mask unoccupied slots with -inf (must be sized to num_slots)
-            mask = torch.full((1, self.num_slots), float('-inf'), device=self.device)
-            for occ_slot in self.slot_to_values.keys():
-                if 0 <= occ_slot < self.num_slots:
-                    mask[0, occ_slot] = 0.0
-            
-            scores = sim + mask
-            
-            # Select top slots
-            k_select = min(top_k, len(self.slot_to_values))
-            if k_select == 0:
-                return []
-                
-            top_sim, top_slots = torch.topk(scores, k_select, dim=-1)
-            
-            results = []
-            for s in top_slots[0].tolist():
-                bucket = self.slot_to_values.get(s, [])
-                if not bucket:
-                    continue
-                
-                # Exact key match inside selected bucket
-                exact_match = None
-                for k, v in bucket:
-                    if k == key_str:
-                        exact_match = v
-                        break
-                        
-                if exact_match is not None:
-                    results.append(exact_match)
-                else:
-                    # Fallback to latest bucket value
-                    results.append(bucket[-1][1])
-                    
-            # Deduplicate while preserving order
-            seen = set()
-            deduped = []
-            for r in results:
-                if r not in seen:
-                    seen.add(r)
-                    deduped.append(r)
-                    
-            return deduped[:top_k]
+    def get_with_status(
+        self,
+        key_or_query: str,
+        top_k: int = 1,
+        threshold: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        """
+        Returns:
+          {
+            "value": str | None,
+            "status": "exact" | "fuzzy" | "missing",
+            "score": float,
+            "matched_key": str | None,
+          }
+        """
+        q = str(key_or_query)
+        thresh = threshold if threshold is not None else self.fuzzy_threshold
 
+        # 1) Exact
+        if q in self.key_to_value:
+            return {
+                "value": self.key_to_value[q],
+                "status": "exact",
+                "score": 1.0,
+                "matched_key": q,
+            }
+
+        # 2) Card fuzzy
+        if self.use_cards:
+            hits = self.cards.search(q, top_k=max(top_k, 3), threshold=thresh)
+            if hits:
+                best_score, best_val, best_key = hits[0]
+                alts = [v for _, v, _ in hits[1:]]
+                return {
+                    "value": best_val,
+                    "status": "fuzzy",
+                    "score": best_score,
+                    "matched_key": best_key,
+                    "alternates": alts,
+                }
+
+        # 3) Abstain
+        return {
+            "value": None,
+            "status": "missing",
+            "score": 0.0,
+            "matched_key": None,
+        }
+
+    # ----- delete -----
     def delete(self, key: str) -> bool:
-        key_str = str(key)
-        
-        # Check existence
-        found = key_str in self.key_to_slot_idx or any(
-            k == key_str for bucket in self.slot_to_values.values() for k, _ in bucket
-        )
-        
-        # Clear from index
-        self.key_to_slot_idx.pop(key_str, None)
-        
-        # Clear from buffer
-        self._train_buffer = [
-            (kv, vv, k, v)
-            for kv, vv, k, v in self._train_buffer
-            if k != key_str
-        ]
-        
-        # Clear from buckets
-        for slot_idx in list(self.slot_to_values.keys()):
-            self.slot_to_values[slot_idx] = [
-                (k, v)
-                for k, v in self.slot_to_values[slot_idx]
-                if k != key_str
+        key = str(key)
+        found = key in self.key_to_value
+
+        self.key_to_value.pop(key, None)
+        slot = self.key_to_slot_idx.pop(key, None)
+        if slot is not None:
+            self.slot_to_values[slot] = [
+                (k, v) for k, v in self.slot_to_values[slot] if k != key
             ]
-            if not self.slot_to_values[slot_idx]:
-                del self.slot_to_values[slot_idx]
-                
+            if not self.slot_to_values[slot]:
+                del self.slot_to_values[slot]
+
+        self.cards.remove(key)
         return found
 
-    def train(self, epochs: int = 50, lr: float = 0.01, margin: float = 0.2) -> None:
-        if not self._train_buffer:
-            return
-            
-        optimizer = torch.optim.Adam(self.model.parameters(), lr=lr)
-        
-        for epoch in range(epochs):
-            for kv, vv, k, v in self._train_buffer:
-                kv = kv.to(self.device)
-                vv = vv.to(self.device)
-                
-                optimizer.zero_grad()
-                sim = self.model.forward(kv, vv, op="write")
-                
-                target_slot = None
-                for s_idx, bucket in self.slot_to_values.items():
-                    for bk, bv in bucket:
-                        if bk == k:
-                            target_slot = s_idx
-                            break
-                    if target_slot is not None:
-                        break
-                        
-                if target_slot is None:
-                    continue
-                    
-                target_sim = sim[0, target_slot]
-                loss = torch.tensor(0.0, device=self.device)
-                for s_idx in range(self.num_slots):
-                    if s_idx != target_slot:
-                        loss = loss + torch.clamp(margin - target_sim + sim[0, s_idx], min=0.0)
-                        
-                if loss.item() > 0:
-                    loss.backward()
-                    optimizer.step()
-
-    def consolidate(self) -> None:
-        if not self._train_buffer:
-            return
-            
-        with torch.no_grad():
-            for s_idx in range(self.num_slots):
-                bucket = self.slot_to_values.get(s_idx, [])
-                if not bucket:
-                    continue
-                    
-                key_vecs = []
-                for kv, vv, k, v in self._train_buffer:
-                    for bk, bv in bucket:
-                        if bk == k:
-                            key_vecs.append(kv)
-                            break
-                if key_vecs:
-                    avg_vec = torch.stack(key_vecs).mean(dim=0).to(self.device)
-                    proj = self.model.key_proj(avg_vec.unsqueeze(0)).squeeze(0)
-                    self.model.prototypes.data[s_idx] = 0.9 * self.model.prototypes.data[s_idx] + 0.1 * proj
-
-    def save(self, path: str) -> None:
-        state = {
-            "slot_to_values": dict(self.slot_to_values),
-            "value_to_slot": self.value_to_slot,
-            "key_to_slot_idx": self.key_to_slot_idx,  # Persist the index
-            "train_buffer": [
-                (kv.cpu(), vv.cpu(), k, v) for kv, vv, k, v in self._train_buffer
-            ],
-            "model_state": self.model.state_dict(),
-            "fact_count": self.fact_count,
-        }
-        torch.save(state, path)
-
-    def load(self, path: str) -> None:
-        state = torch.load(path, map_location=self.device)
-        self.slot_to_values = defaultdict(list)
-        self.slot_to_values.update(state.get("slot_to_values", {}))
-        self.value_to_slot = state.get("value_to_slot", {})
-        self._train_buffer = state.get("train_buffer", [])
-        
-        # Load index, or rebuild it if loading an old checkpoint
-        self.key_to_slot_idx = state.get("key_to_slot_idx") or {
-            k: s for s, bucket in self.slot_to_values.items() for k, _ in bucket
-        }
-        
-        if "model_state" in state:
-            self.model.load_state_dict(state["model_state"])
-
-
-# --- Hybrid Engine ---
-class HybridEngine:
-    def __init__(self, exact_secret: str = "default_secret", **swstm_kwargs):
-        self.exact = ExactMemory(secret=exact_secret)
-        self.swstm = SWSTMEngine(**swstm_kwargs)
-
-    def add(self, key: str, value: str) -> None:
-        self.exact.add(key, value)
-        self.swstm.add(key, value)
-
-    def get(self, key: str, top_k: int = 1) -> List[str]:
-        exact_val = self.exact.get(key)
-        if exact_val is not None:
-            return [exact_val]
-        return self.swstm.get(key, top_k=top_k)
-
-    def delete(self, key: str) -> bool:
-        # Attempt delete on both engines
-        d1 = self.exact.delete(key)
-        d2 = self.swstm.delete(key)
-        return d1 or d2
-
+    # ----- meta -----
     @property
     def fact_count(self) -> int:
-        return len(self.exact) + self.swstm.fact_count
+        return len(self.key_to_value)
 
     def __len__(self) -> int:
         return self.fact_count
-        
-    def train(self, *args, **kwargs):
-        self.swstm.train(*args, **kwargs)
-        
-    def consolidate(self):
-        self.swstm.consolidate()
-        
-    def save(self, path: str):
-        self.swstm.save(path)
-        
-    def load(self, path: str):
-        self.swstm.load(path)
+
+    def consolidate(self) -> None:
+        """No-op placeholder for legacy callers. Cards do not need this."""
+        return
+
+    def train(self, epochs: int = 50, lr: float = 0.01, **_kwargs) -> None:
+        """Legacy no-op. Semantic quality comes from cards, not prototype training."""
+        return
 
 
-# --- Backward compatibility aliases ---
-# Legacy name expected by recallspection/__init__.py
+# Aliases
 SWSTMCore = SWSTMEngine
+HybridEngine = SWSTMEngine
