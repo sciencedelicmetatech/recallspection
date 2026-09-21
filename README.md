@@ -50,7 +50,7 @@ The design goal is simple: memory should be deterministic, auditable, and safe u
 
 **Design philosophy:** Recallspection is not a general cure for LLM hallucination. It is a secure memory infrastructure layer for storing facts with integrity, provenance, and safe retrieval semantics.
 
-**TL;DR:** get(k) = v_set OR Err(Tamper) — never silent wrong data.
+**TL;DR:** get(k) = v_set OR Err(Tamper) never silent wrong data.
 
 ---
 
