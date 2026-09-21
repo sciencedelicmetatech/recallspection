@@ -1,8 +1,4 @@
-I can see exactly what's broken. Here are the specific structural bugs:
 
-What's Broken
-
-# Bug Effect
 1 <div align="center"> opens near the top and never closes Everything is centered and formatting breaks
 2 The ```text block after "Core Architecture" never closes "What is Recallspection?", "Why 2026", "Key Features" — all rendered as monospace code
 3 There's an orphan ``` at the very end GitHub gets confused; rest of file may render as code
