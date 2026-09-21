@@ -1,17 +1,3 @@
-
-1 <div align="center"> opens near the top and never closes Everything is centered and formatting breaks
-2 The ```text block after "Core Architecture" never closes "What is Recallspection?", "Why 2026", "Key Features" — all rendered as monospace code
-3 There's an orphan ``` at the very end GitHub gets confused; rest of file may render as code
-4 Headings like "What is Recallspection?" have no ## They render as plain text, not headings
-5 Tables have inconsistent pipe alignment Tables render but look messy
-
-The big one is #2. That code fence ate half your README.
-
-The Fix
-
-Copy this entire replacement into your README.md. It closes every fence, closes the div, and promotes the headings correctly.
-
-```markdown
 <p align="center">
   <img src="banner.svg" alt="Recallspection Banner" width="800">
 </p>
@@ -56,57 +42,61 @@ Copy this entire replacement into your README.md. It closes every fence, closes 
 
 ---
 
-What is Recallspection?
+## What is Recallspection?
 
-Recallspection is a dual-engine memory system for autonomous AI agents. It combines a tamper-evident exact memory ledger (ExactMemory v3) with a collision-resistant associative memory engine (SWSTM + natural-language cards).
+Recallspection is a dual-engine memory system for autonomous AI agents. It combines a tamper-evident exact memory ledger (ExactMemory v3) with a collision-resistant associative memory engine (SWSTM) and card-based fuzzy retrieval.
 
-Design Philosophy: Recallspection is not a general cure for LLM hallucination. It is a secure memory infrastructure layer that provides deterministic recall for stored facts, cryptographic tamper evidence for persisted records, and reduced overwrite-based forgetting in slot memory. Fuzzy recall uses cards + embedding similarity with a confidence threshold — it abstains instead of returning silent wrong answers.
+The design goal is simple: memory should be deterministic, auditable, and safe under attack. When an exact key is known, Recallspection returns the exact value. When a fact is uncertain, it abstains instead of silently returning the wrong result.
 
-TL;DR: get(k) = v_set ∨ Err(Tamper) — never silent wrong data.
+**Design philosophy:** Recallspection is not a general cure for LLM hallucination. It is a secure memory infrastructure layer for storing facts with integrity, provenance, and safe retrieval semantics.
+
+**TL;DR:** get(k) = v_set OR Err(Tamper) — never silent wrong data.
 
 ---
 
-Why Recallspection in 2026?
+## Why Recallspection in 2026?
 
 The field shifted in 12 months. Memory became both the biggest differentiator and the biggest attack surface.
 
-· Memory in the Age of AI Agents (47-author survey, Dec 2025, 2512.13564): First taxonomy of the explosion after MemGPT (2023), Mem0 (2024), Letta/Zep/Graphiti. Diagnosis: terminological fragmentation, most production systems clustered in (token-level, factual, retrieval-heavy) corner. Trustworthiness flagged as open frontier.
-· HaluMem (Jan 6 2026): First operation-level benchmark. Shows existing memory systems hallucinate during extraction and updating, accumulate, and propagate to QA. End-to-end QA evaluation hides the stage where hallucination arises.
-· GhostWriter / MemGhost (July 2026): One email plants a persistent false memory. 98% injection success, ~60% activation against SOTA agents (Letta, Mem0, Zep). Background-mode 87.5% success on GPT-5.4, 71.4% on Claude Code. MEMORY.md plain-text files load unconditionally every session — RAG needs a query, poisoned memory fires every session.
-· OWASP LLM08:2025 + ASI06: Mandates storage-layer tenant isolation and memory poisoning defenses. SMSR provenance tagging (HMAC-SHA256 per entry) proposed as mitigation — exactly what ExactMemory implements.
+- Memory in the Age of AI Agents (47-author survey, Dec 2025): classification of memory systems and failure modes after MemGPT, Mem0, Letta, Zep, and Graphiti.
+- HaluMem (Jan 2026): benchmark showing memory systems hallucinate during extraction and updating, then propagate those errors into QA.
+- GhostWriter / MemGhost: persistent false memories can be injected via background poisoning attacks with high activation against common agent stacks.
+- OWASP LLM08:2025 + ASI06: mandates storage-layer isolation and memory poisoning defenses. Provenance tagging and tamper detection are foundational mitigations.
 
-Current market: Agentic AI $19.33B in 2026 → $205.88B by 2033 (40.2% CAGR). Agentic AI Orchestration & Memory $37.11B by 2030. Stateful agent infra SAM $1.2B (2026). Visible funding $66M into memory (Mem0 $24M Series A at $150M valuation, Letta $10M). Vector DB market $2.38B → $18.86B by 2035.
-
-Existing vendors solve recall. Recallspection solves recall + integrity + collision resistance.
+Current market momentum is massive, but most systems still solve recall without integrity. Recallspection solves recall + integrity + collision resistance.
 
 ---
 
-Key Features
+## Key Features
 
-ExactMemory Integration
+### ExactMemory Integration
 
-Powered by the companion exactmemory.recallspection library:
+Powered by the companion `exactmemory.recallspection` library:
 
-· Cryptographic Integrity: 32-byte HMAC-SHA256 tags and Container MACs.
-· Replay & Rollback Resistance: Monotonic version counters and hash-chained transparency logs.
-· Zero Dependencies: Pure Python standard library. <600 lines core, <20KB, 145k put/s, 200k get/s, ~78 bytes/record.
-· Patched Detection: get_with_status() returns tampered not missing when a previously-known key (in per_key_max) is absent — distinguishes deletion attack from never-written.
+- Cryptographic integrity with 32-byte HMAC-SHA256 tags and container MACs
+- Replay and rollback resistance via monotonic version counters and hash-chained transparency logs
+- No external dependency burden: pure Python standard library, compact core, high throughput
+- Patched detection semantics: `get_with_status()` distinguishes missing from tampered
 
-SWSTM + Cards
+### SWSTM + Cards
 
-· Collision-Resistant: Slot buckets prevent catastrophic forgetting from slot overwrites.
-· Exact-First Hybrid Retrieval: Checks exact memory before falling back to fuzzy search.
-· Card-based fuzzy retrieval: Natural-language cards + MiniLM cosine for paraphrase queries (exact-first still wins).
-· Abstain on low confidence: Fuzzy hits only return when score ≥ threshold; otherwise missing — never silent wrong.
-· Production-Ready: CI-safe encoder injection, atomic save/load roundtrips, legacy API compatibility.
+- Collision-resistant slot buckets prevent catastrophic overwrites
+- Exact-first hybrid retrieval checks exact memory before fuzzy fallback
+- Card-based fuzzy retrieval for natural-language paraphrase lookup
+- Abstains when confidence is below threshold instead of returning wrong data
+- Production-safe encoder injection and atomic persistence lifecycle
 
 ---
 
-Verified Guarantees
+## Verified Guarantees
 
-1. ExactMemory Integrity Attack Suite (Self-Contained)
+### 1. ExactMemory Integrity Attack Suite
 
-Embeds patched ExactMemory v3.0.1 core directly — no clone needed. Run: python attack_suite.py
+Self-contained attack suite embedded in the project. Run:
+
+```bash
+python attack_suite.py
+```
 
 ```text
 ExactMemory (HMAC-SHA256 + version counter + container MAC)
@@ -116,57 +106,33 @@ ExactMemory (HMAC-SHA256 + version counter + container MAC)
   direct_store_removal    att= 10  TP= 10  DR=100%  SFR=  0%
   wrong_agent_key         att= 40  TP= 40  DR=100%  SFR=  0%
 
-Naive JSON store (what Mem0/Zep/Letta/OpenClaw use today)
+Naive JSON store
   bitflip_hmac_tag        DR=  0%  SFR=100%  (silent wrong)
   payload_rewrite         DR=  0%  SFR=100%
   replay_old_version      DR=  0%  SFR=100%
   direct_store_removal    DR=  0%  SFR=100%
 ```
 
-Attack What it simulates Naive JSON ExactMemory
-bitflip_hmac_tag Disk corruption / file edit 100% silent wrong 100% detected
-payload_rewrite GhostWriter/MemGhost email injection 100% silent wrong 100% detected
-replay_old_version Restore old backup / eTAMP 100% silent wrong 100% detected
-direct_store_removal Deletion attack 100% silent missing 100% tampered (patched)
-wrong_agent_key Key compromise / tenant isolation failure 0% 100% detected
+### 2. SWSTM Collision Resistance Stress Test
 
-Legend: DR = Detection Rate (higher better), SFR = Silent Failure Rate (returns wrong data with no error). Naive store is literally store[k] = v. That's MEMORY.md today.
+Configuration: 2000 slots, 10k facts, average load 5.0, deterministic SHA256 slot mapping.
 
-2. SWSTM Collision Resistance Stress Test
+| Engine | Collisions | Correct Recall | Silent Wrong |
+| --- | ---: | ---: | ---: |
+| Naive single-slot | 8016 | 1984/10000 (19.8%) | 80.2% |
+| Bucketed cap=5 | 1779 | 8221/10000 (82.2%) | 0% |
+| Bucketed cap=8 | 255 | 9745/10000 (97.5%) | 0% |
+| Hybrid exact-first | 0 | 10000/10000 (100%) | 0% |
 
-Config: 2000 slots, 10k facts, avg load 5.0, max load 14 per slot, deterministic SHA256 slot mapping.
+Interpretation: single-slot memory has catastrophic forgetting. Recallspection avoids silent wrong answers by preferring exact matches and abstaining when needed.
 
-Engine Collisions Evictions Correct Recall Silent Wrong
-Naive single-slot (Mem0/Zep style) 8016 8016 overwrites 1984/10000 19.8% 80.2% returns WRONG fact
-Bucketed cap=5 (SWSTM Legendary) 8016 1779 8221/10000 82.2% 0%
-Bucketed cap=8 8016 255 9745/10000 97.5% 0%
-Hybrid exact-first (Recallspection) — 0 10000/10000 100% 0%
+### 3. Card-based Paraphrase Path
 
-Load curve (recall vs facts inserted):
-
-Facts Naive recall Bucket cap 5
-2000 62.8% 100%
-4000 43.0% 99.1%
-6000 31.6% 95.4%
-8000 24.5% 89.6%
-10000 19.8% 82.2%
-
-Interpretation: Single-slot memory has catastrophic forgetting — last writer wins per slot. Without exact key check, it returns wrong user's fact 80.2% of the time (HaluMem hallucination). Bucketed slots delay forgetting 4–5x. Hybrid guarantees 100% for stored facts because ExactMemory never forgets; SWSTM is only for fuzzy/semantic fallback.
-
-3. Card-based Paraphrase Path (measured)
-
-On a 10-query real-language set (e.g. "what color does the user like?" → stored user:favorite_color / blue):
-
-Path Semantic@1
-Exact key 100%
-Natural-language cards + MiniLM cosine 100%
-Legacy prototype-only routing unstable (≈10–60%)
-
-Production fuzzy path: exact → card cosine (≥ threshold) → abstain. Cards are short sentences stored at write time (e.g. "The user's favorite color is blue").
+On a 10-query benchmark, the exact key path and card-based path both reached 100% accuracy on the tested set. Legacy prototype routing was unstable and inconsistent.
 
 ---
 
-Installation
+## Installation
 
 ```bash
 git clone https://github.com/sciencedelicmetatech/recallspection.git
@@ -180,9 +146,9 @@ pip install exactmemory-recallspection
 
 ---
 
-Quickstart
+## Quickstart
 
-Hybrid Engine (Recommended)
+### Hybrid Engine (Recommended)
 
 ```python
 from recallspection.swstm import HybridEngine
@@ -191,7 +157,6 @@ hybrid = HybridEngine(num_slots=2000, mode="flat", device="cpu")
 
 hybrid.add("agent:mission", "Provide secure memory for AI agents")
 print(hybrid.get("agent:mission", top_k=1))
-# ExactMemory hit first, then card fuzzy if not found
 
 # Optional: richer card for better paraphrase recall
 hybrid.add(
@@ -200,12 +165,12 @@ hybrid.add(
     card="The user's favorite color is blue",
 )
 print(hybrid.get_with_status("what color does the user like?"))
-# → status "fuzzy", value "blue" (if score ≥ threshold)
+# -> status "fuzzy", value "blue" (if score >= threshold)
 print(hybrid.get_with_status("what is the meaning of life?"))
-# → status "missing" (abstain — never silent wrong)
+# -> status "missing" (abstain — never silent wrong)
 ```
 
-Direct ExactMemory Usage
+### Direct ExactMemory Usage
 
 ```python
 import hashlib
@@ -223,23 +188,25 @@ print(memory.get_with_status("user:color"))  # ('blue', 'ok')
 
 # Tamper detection
 # memory.store['user:color'] = (rec, bad_tag) -> ('blue', 'tampered') not 'blue'
-# del memory.store['user:color'] -> (None, 'tampered') not 'missing' [PATCHED]
+# del memory.store['user:color'] -> (None, 'tampered') not 'missing'
 
 memory.save("memory.db")
 ```
 
 ---
 
-Running the API
+## Running the API
 
 ```bash
 uvicorn api:app --host 0.0.0.0 --port 8000
 # Open http://localhost:8000/docs for the interactive Swagger UI
 ```
 
-Environment Variables
+---
 
-Required for Production:
+## Environment Variables
+
+### Required for Production
 
 ```text
 RECALLSPECTION_EXACT_SECRET="your-master-exact-secret"
@@ -247,7 +214,7 @@ RECALLSPECTION_ADMIN_KEY="your-admin-key"
 RECALLSPECTION_SIGNUP_SECRET="your-signup-secret"
 ```
 
-Storage Paths (Use persistent disk in production):
+### Storage Paths
 
 ```text
 RECALLSPECTION_MEMORY_FILE="/data/memory.db"
@@ -258,67 +225,68 @@ RECALLSPECTION_EXACT_LOG="/data/transparency.log"
 
 ---
 
-API Endpoints
+## API Endpoints
 
-Public
+### Public
 
-Method Path Description
-GET /health Health check and engine status
-POST /signup Create API key (requires signup secret if configured)
+| Method | Path | Description |
+| --- | --- | --- |
+| GET | `/health` | Health check and engine status |
+| POST | `/signup` | Create API key (requires signup secret if configured) |
 
-Authenticated (X-API-Key header required)
+### Authenticated
 
-Method Path Description
-POST /add Add fact to SWSTM (backend=swstm) or ExactMemory (backend=exact)
-GET /get Retrieve fact (Hybrid exact-first search)
-POST /exact/add Add directly to ExactMemory
-GET /exact/get Retrieve directly from ExactMemory
-GET /usage Show API key usage and remaining quota
+| Method | Path | Description |
+| --- | --- | --- |
+| POST | `/add` | Add a fact to SWSTM or ExactMemory |
+| GET | `/get` | Retrieve a fact using hybrid exact-first search |
+| POST | `/exact/add` | Add directly to ExactMemory |
+| GET | `/exact/get` | Retrieve directly from ExactMemory |
+| GET | `/usage` | Show API key usage and remaining quota |
 
-Admin (X-Admin-Key header required, fails closed if unconfigured)
+### Admin
 
-Method Path Description
-GET /admin/keys List API keys
-POST /admin/revoke/{key_id} Revoke an API key
-POST /admin/save Force memory flush to disk
-POST /admin/consolidate Run SWSTM neural consolidation
-
----
-
-Deployment & Persistence
-
-Recallspection relies on four persisted artifacts:
-
-1. memory.db (ExactMemory container)
-2. transparency.log (ExactMemory hash chain)
-3. swstm.pt (SWSTM model and memory state)
-4. keys.db (API keys and usage tracking)
-
-Render / Container Deployment
-
-· Always use a persistent disk. If the filesystem is ephemeral, your transparency log and memory states will be lost on restart.
-· Map the environment variables (RECALLSPECTION_MEMORY_FILE, etc.) to your persistent disk mount path (e.g., /data/).
-· The API features an auto-save interval and atomic writes to prevent corruption during sudden container kills.
+| Method | Path | Description |
+| --- | --- | --- |
+| GET | `/admin/keys` | List API keys |
+| POST | `/admin/revoke/{key_id}` | Revoke an API key |
+| POST | `/admin/save` | Force memory flush to disk |
+| POST | `/admin/consolidate` | Run SWSTM neural consolidation |
 
 ---
 
-Security Model
+## Deployment & Persistence
 
-· ExactMemory Guarantees: Detects payload tampering, metadata modification, record substitution, file rollback, and log deletion via HMAC-SHA256 and SHA3-256 hash chains. Patched to detect direct store removal as tampered.
-· Rollback Protection: Transparency log with prev_hash chain, max_version check, optional S3 Object Lock remote anchor for log+container rollback.
-· API Security: Includes API key auth, usage quotas, signup secrets, fail-closed admin routes, constant-time secret comparison (hmac.compare_digest), payload size limits, and internal error masking.
-· What it does NOT claim: Does not solve general LLM hallucination. Does not prevent write — makes write auditable and undeletable without detection. Fuzzy path abstains below threshold instead of guessing.
+Recallspection depends on four persisted artifacts:
+
+1. `memory.db` — ExactMemory container
+2. `transparency.log` — ExactMemory hash chain
+3. `swstm.pt` — SWSTM model and memory state
+4. `keys.db` — API keys and usage tracking
+
+For Render or container deployment:
+
+- Use a persistent disk
+- Map all persistence paths under `/data/`
+- Keep the API auto-save interval enabled for crash safety
 
 ---
 
-Testing
+## Security Model
 
-The test suite is fully CI-safe (no external model downloads required for core tests):
+- ExactMemory detects payload tampering, metadata tampering, record substitution, file rollback, and log deletion using HMAC-SHA256 and hash chaining
+- Rollback protection is enforced via transparency logs and version checks
+- API access controls include API key auth, usage quotas, fail-closed admin routes, and constant-time secret comparisons
+- Fuzzy retrieval abstains below threshold instead of silently returning wrong data
+
+---
+
+## Testing
 
 ```bash
 pytest tests/ -v --cov=recallspection
 
-# Integrity attack suite (self-contained, no deps)
+# Integrity attack suite
 python tests/test_integrity_attack_suite.py
 
 # Collision stress test
@@ -327,37 +295,19 @@ python tests/test_swstm_collision.py
 
 ---
 
-Troubleshooting
+## Troubleshooting
 
-Error Fix
-ModuleNotFoundError: No module named 'exactmemory' Run pip install exactmemory-recallspection
-Health endpoint shows swstm_loaded: false SWSTM state file doesn't exist yet, or persistence path isn't writable. Add a fact and trigger /admin/save.
-ExactMemory raises tamper/rollback errors Do not manually edit memory.db or transparency.log. These errors mean the cryptographic integrity system is working as designed.
-get_with_status() returns tampered for missing key You hit the patched case — key was previously known (in per_key_max) but now absent from store. This is deletion attack detection, not a bug.
-Fuzzy returns missing on a paraphrase Score was below threshold. Pass a richer card= on write, or lower fuzzy_threshold (default 0.45).
+| Error | Fix |
+| --- | --- |
+| `ModuleNotFoundError: No module named 'exactmemory'` | Run `pip install exactmemory-recallspection` |
+| Health endpoint shows `swstm_loaded: false` | Ensure the state file path is writable and add a fact before saving |
+| ExactMemory raises tamper or rollback errors | Do not edit `memory.db` or `transparency.log` manually; the system is working as designed |
+| `get_with_status()` returns `tampered` for a missing key | This is a deletion-attack detection case |
+| Fuzzy queries return `missing` | Add a richer `card=` on write or lower the fuzzy threshold |
 
 ---
 
 <p align="center">
   <strong>Recallspection</strong> — Secure memory infrastructure for autonomous AI agents.<br>
   Part of the Sciencedelic Metatech research ecosystem.
-</p>If this is true — and the suites above prove it — memory stops being a cache and becomes a ledger. That is a multi-billion dollar infrastructure shift.
-
-```
-
----
-
-## What Changed
-
-| Bug | Fix |
-| :--- | :--- |
-| `<div align="center">` never closed | Now closes right after the badges |
-| ` ```text ` fence never closed after the ASCII diagram | Added closing ` ``` ` after the diagram |
-| Orphan ` ``` ` at the very end | Removed |
-| Headings like "What is Recallspection?" had no `##` | Promoted to proper `##` headings |
-| Tables were misaligned | Realigned pipes |
-| Bullet lists had inconsistent spacing | Cleaned up |
-| Blockquotes were unquoted | Added `>` prefix to final quote |
-
-Copy the whole block above into your `README.md`. Commit. Refresh the GitHub page. It will render correctly.
-```
+</p>
