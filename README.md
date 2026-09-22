@@ -119,7 +119,7 @@ Powered by the companion [exactmemory.recallspection](https://github.com/science
 
 ### 1. ExactMemory Integrity Attack Suite (Self-Contained)
 
-Embeds patched ExactMemory v3.0.1 core directly - no clone needed. Run: `python attack_suite.py`
+Embeds patched ExactMemory v3.0.1 core directly, no clone needed. Run: `python attack_suite.py`
 
 ```
 ExactMemory (HMAC-SHA256 + version counter + container MAC)
@@ -169,7 +169,7 @@ Config: 2000 slots, 10k facts, avg load 5.0, max load 14 per slot, deterministic
 | 8000 | 24.5% | 89.6% |
 | 10000 | 19.8% | 82.2% |
 
-Interpretation: Single-slot memory has catastrophic forgetting - last writer wins per slot. Without exact key check, it returns wrong user's fact 80.2% of the time (HaluMem hallucination). Bucketed slots delay forgetting 4-5x. Hybrid guarantees 100% for stored facts because ExactMemory never forgets; SWSTM is only for fuzzy/semantic fallback.
+Interpretation: Single-slot memory has catastrophic forgetting, last writer wins per slot. Without exact key check, it returns wrong user's fact 80.2% of the time (HaluMem hallucination). Bucketed slots delay forgetting 4-5x. Hybrid guarantees 100% for stored facts because ExactMemory never forgets; SWSTM is only for fuzzy/semantic fallback.
 
 ### 3. Optional card search (in-house, not LoCoMo)
 
@@ -217,7 +217,7 @@ Paying that on every `put()` would break the property that makes ExactMemory use
 
 ### Verdict vocabulary
 
-The draft defines a three-valued verdict — `witnessed` / `consistent-unwitnessed` / `diverged` — structured so that a valid-but-unwitnessed record cannot be reported as fully verified.
+The draft defines a three-valued verdict:  `witnessed` / `consistent-unwitnessed` / `diverged` — structured so that a valid-but-unwitnessed record cannot be reported as fully verified.
 
 ExactMemory already uses a three-valued vocabulary of its own:
 
