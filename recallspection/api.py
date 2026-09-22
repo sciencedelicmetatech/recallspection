@@ -127,23 +127,13 @@ def const_eq(a: str, b: str) -> bool:
 exact_memory = None
 exact_keys = None
 try:
-    # Try companion lib
-    try:
-        from exactmemory import (
-            ExactMemory,
-            FormatVersionError,
-            TamperError,
-            RollbackError,
-            LogCompromisedError,
-        )
-    except ImportError:
-        from recallspection.exact import (  # fallback
-            ExactMemory,
-            FormatVersionError,
-            TamperError,
-            RollbackError,
-            LogCompromisedError,
-        )
+    from exactmemory import (
+        ExactMemory,
+        FormatVersionError,
+        TamperError,
+        RollbackError,
+        LogCompromisedError,
+    )
 
     master = EXACT_SECRET.encode()
     exact_keys = {
