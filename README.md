@@ -183,11 +183,11 @@ This is retrieval of *keys*, not end-to-end chat QA. Do not compare it to vendor
 
 ---
 
-## IETF Agent Record Compliance for AI Agents — Current Status
+## IETF Agent Record Compliance for AI Agents : Current Status
 
 In August 2026 the IETF published an Informational draft, `draft-maintainer-1f916-agent-record-00`, describing a signed append-only record format for AI agents: key-binding events, Merkle checkpoints over an RFC 6962 log, countersigned witnesses, memory seals, attestations, and offline-verifiable dossiers. It is not an RFC. It carries no formal standards-process standing. It is one registry's deployed wire format, published to invite independent implementation.
 
-Recallspection emits records in the **same shape** — signed envelope, hash chain, checkpoint, dossier export — and **not** in the same signature algorithm.
+Recallspection emits records in the **same shape** signed envelope, hash chain, checkpoint, dossier export — and **not** in the same signature algorithm.
 
 ### Signature algorithm: HMAC-SHA256 now, Ed25519 opt-in
 
