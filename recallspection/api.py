@@ -1,10 +1,14 @@
 """
-Recallspection v3.1 Production API
+Recallspection v3.2.0 Production API
 - Dual-engine: ExactMemory + SWSTM Legendary
 - SQLite key management + usage quotas
 - Stripe billing (checkout, portal, webhook) -> pays Sciencedelic Metatech
 - One-click deploy ready (Render/Railway/Fly)
 - Fail-closed admin, constant-time compare, payload limits, atomic saves
+
+v3.2.0 changes:
+- Fail-loud on store load: FormatVersionError / TamperError / RollbackError /
+  LogCompromisedError cause SystemExit. No silent empty-store fallback.
 
 Env:
   RECALLSPECTION_EXACT_SECRET - master secret for ExactMemory keys (required prod)
@@ -15,7 +19,7 @@ Env:
   RECALLSPECTION_DB_FILE - /data/keys.db
   RECALLSPECTION_EXACT_LOG - /data/transparency.log
   STRIPE_SECRET_KEY - sk_live_... (for billing)
-  STRIPE_WEBHOOK_SECRET - whsec_... 
+  STRIPE_WEBHOOK_SECRET - whsec_...
   STRIPE_PRICE_PRO - price_... ($20/mo)
   STRIPE_PRICE_TEAM - price_... ($99/mo)
   FRONTEND_URL - https://your-dashboard.com for redirect after checkout
@@ -63,9 +67,9 @@ if STRIPE_AVAILABLE and STRIPE_SECRET:
     stripe.api_key = STRIPE_SECRET
 
 app = FastAPI(
-    title="Recallspection API v3.1",
+    title="Recallspection API v3.2.0",
     description="Tamper-evident exact memory + collision-resistant SWSTM. TL;DR get(k)=v_set ∨ Err(Tamper)",
-    version="3.1.0"
+    version="3.2.0"
 )
 
 app.add_middleware(
@@ -125,9 +129,21 @@ exact_keys = None
 try:
     # Try companion lib
     try:
-        from exactmemory import ExactMemory
+        from exactmemory import (
+            ExactMemory,
+            FormatVersionError,
+            TamperError,
+            RollbackError,
+            LogCompromisedError,
+        )
     except ImportError:
-        from recallspection.exact import ExactMemory  # fallback
+        from recallspection.exact import (  # fallback
+            ExactMemory,
+            FormatVersionError,
+            TamperError,
+            RollbackError,
+            LogCompromisedError,
+        )
 
     master = EXACT_SECRET.encode()
     exact_keys = {
@@ -139,9 +155,20 @@ try:
     if Path(MEMORY_FILE).exists():
         try:
             exact_memory.load(MEMORY_FILE)
+        except FormatVersionError as e:
+            print(f"[FATAL] Format version mismatch: {e}")
+            print("[FATAL] Refusing to start with incompatible store. Re-ingest data or downgrade.")
+            raise SystemExit(2)
+        except (TamperError, RollbackError, LogCompromisedError) as e:
+            print(f"[FATAL] Integrity failure on load: {e}")
+            print("[FATAL] Refusing to serve from a compromised or rolled-back store.")
+            raise SystemExit(3)
         except Exception as e:
-            print(f"[ExactMemory] load failed (integrity working): {e}")
+            print(f"[FATAL] Unexpected load failure: {e}")
+            raise SystemExit(4)
     print("[ExactMemory] initialized")
+except SystemExit:
+    raise
 except Exception as e:
     print(f"[ExactMemory] init failed: {e} - running in mock mode")
     exact_memory = None
@@ -197,12 +224,10 @@ def verify_api_key(x_api_key: str = Header(None)) -> Dict[str, Any]:
     if not x_api_key:
         raise HTTPException(401, "Missing X-API-Key")
     conn = get_conn()
-    # compare hash, not raw
     h = hash_key(x_api_key)
     row = conn.execute("SELECT * FROM api_keys WHERE api_key_hash=? AND status='active'", (h,)).fetchone()
     conn.close()
     if not row:
-        # constant time fake compare to avoid timing leak
         const_eq(h, "0"*64)
         raise HTTPException(401, "Invalid API key")
     return dict(row)
@@ -219,9 +244,10 @@ def verify_admin(x_admin_key: str = Header(None)):
 def health():
     return {
         "status": "ok",
-        "version": "3.1.0",
+        "version": "3.2.0",
         "exact_loaded": exact_memory is not None,
         "swstm_loaded": hybrid is not None,
+        "store_format": exact_memory.VERSION if exact_memory else None,
         "memory_file": MEMORY_FILE,
         "swstm_file": SWSTM_FILE,
         "db_file": DB_FILE,
@@ -249,7 +275,6 @@ def signup(req: SignupRequest):
     conn.commit()
     conn.close()
 
-    # Optional: create Stripe customer if email provided and tier != free
     stripe_customer = None
     if STRIPE_AVAILABLE and STRIPE_SECRET and req.email and req.tier != "free":
         try:
@@ -305,7 +330,6 @@ def add_fact(req: AddRequest, auth=Depends(verify_api_key)):
             if hybrid:
                 hybrid.add(req.key, req.value)
                 result["swstm"] = "ok"
-        # auto-save atomic
         if exact_memory:
             exact_memory.save(MEMORY_FILE)
         if hybrid:
@@ -317,7 +341,6 @@ def add_fact(req: AddRequest, auth=Depends(verify_api_key)):
 @app.get("/get")
 def get_fact(key: str, top_k: int = 1, auth=Depends(verify_api_key)):
     check_quota(auth)
-    # exact-first hybrid
     try:
         if exact_memory:
             val, status = exact_memory.get_with_status(key) if hasattr(exact_memory, "get_with_status") else (exact_memory.get(key), "ok")
@@ -333,7 +356,6 @@ def get_fact(key: str, top_k: int = 1, auth=Depends(verify_api_key)):
 
         return {"key": key, "value": None, "source": "none", "status": "missing"}
     except Exception as e:
-        # internal error masking
         print(f"[get] error {e}")
         raise HTTPException(500, "Internal retrieval error")
 
@@ -365,7 +387,6 @@ def billing_checkout(req: CheckoutRequest):
     }
     price_id = price_map.get(req.tier)
     if not price_id or price_id.startswith("price_") == False:
-        # fallback for demo
         price_id = None
 
     try:
@@ -405,13 +426,11 @@ async def stripe_webhook(request: Request):
     except Exception as e:
         raise HTTPException(400, f"Webhook error: {e}")
 
-    # Handle subscription -> upgrade quota
     if event["type"] in ("checkout.session.completed", "customer.subscription.created", "customer.subscription.updated"):
         obj = event["data"]["object"]
         email = obj.get("customer_email") or obj.get("customer_details", {}).get("email")
         customer_id = obj.get("customer") or obj.get("customer_id")
         tier = obj.get("metadata", {}).get("tier", "pro")
-        # Update DB by customer_id or email
         try:
             conn = get_conn()
             if customer_id:
@@ -466,7 +485,7 @@ def admin_consolidate(_=Depends(verify_admin)):
 @app.get("/")
 def root():
     return {
-        "name": "Recallspection API v3.1",
+        "name": "Recallspection API v3.2.0",
         "docs": "/docs",
         "health": "/health",
         "dashboard": FRONTEND_URL,
