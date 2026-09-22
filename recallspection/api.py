@@ -9,6 +9,9 @@ Recallspection v3.2.0 Production API
 v3.2.0 changes:
 - Fail-loud on store load: FormatVersionError / TamperError / RollbackError /
   LogCompromisedError cause SystemExit. No silent empty-store fallback.
+- /get blocks fuzzy fallback for terminal exact statuses:
+  tampered, revoked, tombstoned, expired.
+- /exact/get returns "terminal" boolean.
 
 Env:
   RECALLSPECTION_EXACT_SECRET - master secret for ExactMemory keys (required prod)
@@ -334,10 +337,32 @@ def get_fact(key: str, top_k: int = 1, auth=Depends(verify_api_key)):
     try:
         if exact_memory:
             val, status = exact_memory.get_with_status(key) if hasattr(exact_memory, "get_with_status") else (exact_memory.get(key), "ok")
+
             if status == "ok" and val is not None:
                 return {"key": key, "value": val, "source": "exact", "status": status, "tamper": False}
+
+            # Terminal exact-layer statuses. Do NOT fall through to SWSTM:
+            # the fuzzy layer must not answer for a key the exact layer has
+            # flagged as tampered, revoked, expired, or tombstoned.
             if status == "tampered":
-                return {"key": key, "value": None, "source": "exact", "status": "tampered", "tamper": True, "detail": "Previously known key missing or HMAC mismatch - deletion/corruption attack detected"}
+                return {"key": key, "value": None, "source": "exact", "status": "tampered",
+                        "tamper": True,
+                        "detail": "Previously known key missing or HMAC mismatch - deletion/corruption attack detected"}
+            if status == "revoked":
+                return {"key": key, "value": None, "source": "exact", "status": "revoked",
+                        "tamper": False,
+                        "detail": "Record revoked. Not eligible for fuzzy fallback."}
+            if status == "tombstoned":
+                return {"key": key, "value": None, "source": "exact", "status": "tombstoned",
+                        "tamper": False,
+                        "detail": "Record deleted. Not eligible for fuzzy fallback."}
+            if status == "expired":
+                return {"key": key, "value": None, "source": "exact", "status": "expired",
+                        "tamper": False,
+                        "detail": "Record expired (TTL). Not eligible for fuzzy fallback."}
+
+            # Only "missing" reaches here: the exact layer has no record.
+            # Fuzzy fallback is allowed.
 
         if hybrid:
             res = hybrid.get(key, top_k=top_k)
@@ -361,7 +386,13 @@ def exact_get(key: str, auth=Depends(verify_api_key)):
         raise HTTPException(500, "ExactMemory not loaded")
     try:
         val, status = exact_memory.get_with_status(key) if hasattr(exact_memory, "get_with_status") else (exact_memory.get(key), "ok")
-        return {"key": key, "value": val, "status": status, "tamper": status == "tampered"}
+        return {
+            "key": key,
+            "value": val,
+            "status": status,
+            "tamper": status == "tampered",
+            "terminal": status in ("tampered", "revoked", "tombstoned", "expired"),
+        }
     except Exception as e:
         raise HTTPException(500, str(e)[:500])
 
