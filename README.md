@@ -73,7 +73,7 @@ Recallspection is a **ledger for stored facts**, not a long-chat QA engine.
 | Stored key → stored value, or an explicit error | Beating Mem0 / LoCoMo / LongMemEval |
 | Tamper is **detected** (HMAC, version, log) | Curing general LLM hallucination |
 | Under slot overload, exact-first does not silently swap facts | "98% semantic @ 5k" or neural SOTA |
-| Fuzzy may **propose keys**; only ExactMemory returns **values** | Fuzzy is allowed to answer `blue` for "CI green?" |
+| Fuzzy may **propose keys**; only ExactMemory returns **values** | Fuzzy is allowed to answer per threshold" |
 
 **Their field:** remember the conversation.  
 **Ours:** don't let memory lie.
