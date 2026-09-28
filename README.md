@@ -1,6 +1,4 @@
-This is a complete README.md file for/ Recallspection, a tamper-evident memory ledgerci and S3 anchor.yml for AI agents. It combines exact recall, collision-resistant slot routing, and third-party verifiable integrity proofs.
 
-```markdown
 <p align="center">
   <img src="banner.svg" alt="Recallspection Banner" width="800">
 </p>
