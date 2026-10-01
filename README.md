@@ -35,7 +35,7 @@ Single-slot memory (Mem0/Zep style) under 5× overload:
 | SWSTM Bucket-8 | 97.45 % | 0 % |
 | **Recallspection (hybrid exact-first)** | **100 %** | **0 %** |
 
-Under load, naive stores return **another key's fact 80 % of the time** — the exact failure mode HaluMem (Jan 2026) documents. Recallspection never silently swaps facts.
+Under load, naive stores return **another key's fact 80 % of the time** the exact failure mode HaluMem (Jan 2026) documents. Recallspection never silently swaps facts.
 
 ---
 
