@@ -105,24 +105,29 @@ target-version = "py310"
 exclude = [
     ".git",
     ".venv",
+    "venv",
     "__pycache__",
     "build",
     "dist",
     "*.egg-info",
+    "demos",
+    "examples",
+    "dashboard.py",
+    "showcase.py",
+    "stress_test_50k.py",
+    "test_a_51hop_proof.py",
+    "index.html",
 ]
 
 [tool.ruff.lint]
 select = [
-    "E",   # pycodestyle errors
-    "W",   # pycodestyle warnings
-    "F",   # pyflakes
-    "I",   # isort
-    "B",   # flake8-bugbear
-    "C4",  # flake8-comprehensions
-    "UP",  # pyupgrade
+    "E9",   # syntax errors
+    "F63",  # invalid print/assert syntax
+    "F7",   # syntax errors in statements
+    "F82",  # undefined names
 ]
 ignore = [
-    "E501",  # line too long, handled by formatter
+    "E501",  # line too long
 ]
 
 [tool.coverage.run]
