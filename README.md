@@ -40,10 +40,6 @@ Under load, naive stores return **another key's fact 80 % of the time** the exac
 ## Install
 
 ```bash
-git clone https://github.com/sciencedelicmetatech/recallspection.git
-cd recallspection
-python -m venv .venv && source .venv/bin/activate
-pip install -e ".[all]"
-
-# For the S3 anchor path only:
-pip install -e ".[anchor]"
+pip install git+https://github.com/sciencedelicmetatech/recallspection.git
+# For the S3 anchor path:
+pip install "recallspection[anchor] @ git+https://github.com/sciencedelicmetatech/recallspection.git"
