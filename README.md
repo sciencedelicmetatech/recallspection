@@ -9,7 +9,7 @@
 
 **Tamper-evident exact memory + collision-resistant neural associative memory + S3 Object Lock anchor for AI agents.**
 
-**The flight recorder, not the cache.**
+**The tides is coming.**
 
 [![CI](https://github.com/sciencedelicmetatech/recallspection//badge.svg)](https://github.com/sciencedelicmetatech/recallspection/actions/workflows/ci.yml)
 ![Python](https://img.shields.io/badge/Python-3.10%2B-blue)
