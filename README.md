@@ -208,7 +208,7 @@ Research
 
 Part of the Sciencedelic Metatech ecosystem.
 
-Companion paper: The ExactMemory-Recallspection Integrity Theorem — write-time commitment is necessary for tamper-evident agent memory.
+Companion paper: The ExactMemory-Recallspection Integrity Theorem : write-time commitment is necessary for tamper-evident agent memory.
 
 ---
 
@@ -221,10 +221,10 @@ Dual-licensed:
 
 ---
 
-<div align="center">The flight recorder, not the cache.
+<div align="center">The tides is coming now.
 
 Memory stops being a cache and becomes a ledger. The store cannot quietly return a different fact. The log cannot be quietly rolled back.
 
 </div>
-```---
+
 
