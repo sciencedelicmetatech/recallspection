@@ -1,46 +1,47 @@
+<div align="center">
+
+<img src="banner.svg" alt="Recallspection Banner" width="800">
+
 # Recallspection
 
-Tamper-evident exact memory for autonomous AI agents.
+**Tamper-evident exact memory for autonomous AI agents.**
 
 `get(k)` returns the stored value or `Err(Tamper)`. Never silent wrong data.
 
-## Repository layout
+[![CI](https://github.com/sciencedelicmetatech/recallspection/actions/workflows/ci.yml/badge.svg)](https://github.com/sciencedelicmetatech/recallspection/actions/workflows/ci.yml)
+[![Python](https://img.shields.io/badge/Python-3.10%2B-blue?logo=python&logoColor=white)](https://www.python.org/)
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.100%2B-009688?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
+[![PyTorch](https://img.shields.io/badge/PyTorch-2.x-EE4C2C?logo=pytorch&logoColor=white)](https://pytorch.org/)
+[![ExactMemory](https://img.shields.io/badge/ExactMemory-v3.2-8A2BE2)](https://github.com/sciencedelicmetatech/recallspection)
+[![Anchor](https://img.shields.io/badge/Anchor-S3%20Object%20Lock%20COMPLIANCE-00FF88?logo=amazons3&logoColor=white)](https://docs.aws.amazon.com/AmazonS3/latest/userguide/object-lock.html)
+[![IETF](https://img.shields.io/badge/IETF%20Agent%20Record-inspired-6f42c1)](https://datatracker.ietf.org/)
+[![License](https://img.shields.io/badge/License-AGPL--3.0%20%7C%20Commercial-blue)](LICENSE)
+[![Status](https://img.shields.io/badge/status-anchor--ready-success)]()
 
-- `recallspection/` — core package for the public API, SWSTM and anchor logic
-- `exactmemory_recallspection/` — exact-memory ledger implementation
-- `tests/` — integrity and persistence test suite
-- `docs/` — project documentation, architecture notes, API references, and security material
-- `examples/` — demo scripts and usage examples
-- `sample_data/` — sample datasets and fixtures
-- `dashboard.py`, `showcase.py`, `stress_test_50k.py`, `test_a_51hop_proof.py` — legacy prototype and demos kept for compatibility
+[![PyPI version](https://img.shields.io/pypi/v/recallspection?logo=pypi&logoColor=white)](https://pypi.org/project/recallspection/)
+[![PyPI downloads](https://img.shields.io/pypi/dm/recallspection?logo=pypi&logoColor=white)](https://pypi.org/project/recallspection/)
+[![DOI](https://img.shields.io/badge/DOI-10.5281%2Fzenodo.23078584-blue?logo=zenodo&logoColor=white)](https://doi.org/10.5281/zenodo.23078584)
 
-## Quick start
+</div>
+
+---
+
+## The Problem
+
+Single-slot memory (Mem0/Zep style) under 5× overload:
+
+| Store | Recall | Silent wrong |
+|---|---:|---:|
+| Naive single-slot | 19.84 % | **80.16 %** |
+| SWSTM Bucket-8 | 97.45 % | 0 % |
+| **Recallspection (hybrid exact-first)** | **100 %** | **0 %** |
+
+Under load, naive stores return **another key's fact 80 % of the time** — the exact failure mode HaluMem (Jan 2026) documents. Recallspection never silently swaps facts.
+
+---
+
+## Install
 
 ```bash
-pip install -e .
-pytest tests -q
-```
-
-## Documentation
-
-- [docs/README.md](docs/README.md)
-- [API.md](API.md)
-- [EVALUATION.md](EVALUATION.md)
-- [ROADMAP.md](ROADMAP.md)
-- [SECURITY.md](SECURITY.md)
-
-## Examples
-
-- [examples/README.md](examples/README.md)
-
-## CI and packaging
-
-The project is configured for Python 3.10+ packaging and pytest.
-
-```bash
-python -m pytest
-```
-
-## License
-
-Dual licensed under AGPL-3.0 and the Recallspection Integrity License.
+pip install recallspection
+pip install recallspection[anchor]   # adds boto3 for S3 anchor
