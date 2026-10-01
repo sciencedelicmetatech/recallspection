@@ -1,5 +1,5 @@
 """
-recallspection.anchor — S3 Object Lock anchor for the transparency log.
+recallspection.anchor - S3 Object Lock anchor for the transparency log.
 
 The transparency log proves records have not been modified. It does not prove
 that a whole authentic file has not been replaced with an earlier authentic
@@ -9,7 +9,7 @@ This module publishes the Merkle root of the transparency log to S3 with
 Object Lock in COMPLIANCE mode. Even the bucket owner cannot delete or modify
 the anchor before the retain-until date.
 
-Zero hard dependency on boto3 — it is imported lazily inside the client
+Zero hard dependency on boto3 - it is imported lazily inside the client
 property. Install with: pip install recallspection[anchor]
 """
 
@@ -25,29 +25,24 @@ from pathlib import Path
 from typing import Any
 
 
-# =============================================================================
-# Merkle tree (SHA3-256, duplicate-last-on-odd)
-# =============================================================================
-
 def _sha3(data: bytes) -> bytes:
     return hashlib.sha3_256(data).digest()
 
 
-def compute_merkle_root(log_path: str | Path) -> str:
+def compute_merkle_root(log_path):
     """
     Compute the Merkle root of the transparency log.
 
-    Each non-empty line of the log is a leaf. Leaves are hashed with SHA3-256,
-    combined pairwise, and the last node is duplicated on odd levels.
+    Each non-empty line is a leaf. Leaves are SHA3-256 hashed, combined
+    pairwise, with the last node duplicated on odd levels.
 
-    Returns the root as a hex string prefixed with "0x".
-    Raises FileNotFoundError if the log does not exist.
+    Returns the root as a hex string prefixed with 0x.
     """
     path = Path(log_path)
     if not path.exists():
-        raise FileNotFoundError(f"Transparency log not found: {path}")
+        raise FileNotFoundError("Transparency log not found: " + str(path))
 
-    leaves: list[bytes] = []
+    leaves = []
     with path.open("r", encoding="utf-8") as f:
         for line in f:
             line = line.strip()
@@ -65,10 +60,6 @@ def compute_merkle_root(log_path: str | Path) -> str:
     return "0x" + level[0].hex()
 
 
-# =============================================================================
-# Anchor record
-# =============================================================================
-
 @dataclass
 class AnchorRecord:
     root: str
@@ -81,16 +72,12 @@ class AnchorRecord:
     max_version: int
     mode: str = "COMPLIANCE"
 
-    def to_dict(self) -> dict[str, Any]:
+    def to_dict(self):
         return asdict(self)
 
-    def to_json(self) -> str:
+    def to_json(self):
         return json.dumps(self.to_dict(), indent=2, sort_keys=True)
 
-
-# =============================================================================
-# S3 Object Lock anchor
-# =============================================================================
 
 class RemoteAnchorS3:
     """
@@ -102,20 +89,20 @@ class RemoteAnchorS3:
 
     def __init__(
         self,
-        bucket: str,
-        region: str = "us-east-1",
-        retention_days: int = 30,
-        prefix: str = "anchors/",
-        client:"{ Any = None,
+        bucket,
+        region="us-east-1",
+        retention_days=30,
+        prefix="anchors/",
+        client=None,
     ):
         self.bucket = bucket
-self        self.region = region
-        self.ret.pention_days = retention_days
-        self.prefix = (prefix.rstrip("/") + "/ref") if prefix else ""
-        self._client = client  # injection point for testsix
+        self.region = region
+        self.retention_days = retention_days
+        self.prefix = (prefix.rstrip("/") + "/") if prefix else ""
+        self._client = client
 
     @property
-    def client(self)}{ -> Any:
+    def client(self):
         if self._client is not None:
             return self._client
         try:
@@ -128,25 +115,14 @@ self        self.region = region
         self._client = boto3.client("s3", region_name=self.region)
         return self._client
 
-    def anchor(
-        self,
-        log_path: str | Path,
-        max_version: int = 0,
-    ) -> AnchorRecord:
-        """Compute the Merkle root of the log and write it to S3 with COMPLIANCE lock."""
+    def anchor(self, log_path, max_version=0):
         root = compute_merkle_root(log_path)
         return self.anchor_root(root, max_version=max_version, log_path=log_path)
 
-    def anchor_root(
-        self,
-        root: str,
-        max_version: int = 0,
-        log_path: str | Path | None = None,
-    ) -> AnchorRecord:
-        """Write a given root to S3. Used when the root is already known."""
+    def anchor_root(self, root, max_version=0, log_path=None):
         now = datetime.now(timezone.utc)
         retain_until = now + timedelta(days=self.retention_days)
-        key = froot}.json"
+        key = self.prefix + root + ".json"
 
         count = 0
         if log_path is not None and Path(log_path).exists():
@@ -174,9 +150,8 @@ self        self.region = region
         )
         return body
 
-    def get_retention(self, root: str) -> dict[str, Any]:
-        """Return {mode, retain_until} for the anchor of the given root."""
-        key = f"{self.prefix}{root}.json"
+    def get_retention(self, root):
+        key = self.prefix + root + ".json"
         resp = self.client.get_object_retention(Bucket=self.bucket, Key=key)
         retention = resp.get("Retention", {}) or {}
         retain_until = retention.get("RetainUntilDate")
@@ -187,8 +162,7 @@ self        self.region = region
             "retain_until": retain_until,
         }
 
-    def get_latest(self) -> AnchorRecord | None:
-        """Return the most recent anchor object, or None if the prefix is empty."""
+    def get_latest(self):
         resp = self.client.list_objects_v2(Bucket=self.bucket, Prefix=self.prefix)
         contents = resp.get("Contents", []) or []
         if not contents:
@@ -198,14 +172,8 @@ self        self.region = region
         data = json.loads(obj["Body"].read().decode("utf-8"))
         return AnchorRecord(**data)
 
-    def verify(self, root: str) -> dict[str, Any]:
-        """
-        Third-party verification for a given root.
-
-        Returns:
-            {local_valid, s3_locked, compliance, retain_until}
-        """
-        key = f"{self.prefix}{root}.json"
+    def verify(self, root):
+        key = self.prefix + root + ".json"
         try:
             self.client.head_object(Bucket=self.bucket, Key=key)
             retention = self.get_retention(root)
@@ -225,26 +193,14 @@ self        self.region = region
             }
 
 
-# =============================================================================
-# Convenience: env-driven entry point
-# =============================================================================
-
 def anchor_root(
-    log_path: str | Path,
-    bucket: str | None = None,
-    region: str | None = None,
-    retention_days: int | None = None,
-    max_version: int = 0,
-    client: Any = None,
-) -> AnchorRecord:
-    """
-    Compute the Merkle root of a transparency log and write it to S3.
-
-    Reads bucket, region, and retention from the environment when not provided:
-        RECALLSPECTION_S3_BUCKET
-        RECALLSPECTION_S3_REGION              (default: us-east-1)
-        RECALLSPECTION_S3_RETENTION_DAYS      (default: 30)
-    """
+    log_path,
+    bucket=None,
+    region=None,
+    retention_days=None,
+    max_version=0,
+    client=None,
+):
     bucket = bucket or os.environ.get("RECALLSPECTION_S3_BUCKET")
     region = region or os.environ.get("RECALLSPECTION_S3_REGION", "us-east-1")
     if retention_days is None:
@@ -265,26 +221,11 @@ def anchor_root(
     return anchor.anchor(log_path, max_version=max_version)
 
 
-# =============================================================================
-# EU AI Act Art. 12 audit export
-# =============================================================================
-
-def audit_export(
-    log_path: str | Path,
-    output_path: str | Path,
-    from_ts: str | None = None,
-    to_ts: str | None = None,
-    anchor: RemoteAnchorS3 | None = None,
-) -> Path:
-    """
-    Export a zip for EU AI Act Article 12: log slice, Merkle proof, S3 proof.
-
-    Returns the path to the created zip.
-    """
+def audit_export(log_path, output_path, from_ts=None, to_ts=None, anchor=None):
     log_path = Path(log_path)
     output_path = Path(output_path)
 
-    entries: list[dict[str, Any]] = []
+    entries = []
     if log_path.exists():
         with log_path.open("r", encoding="utf-8") as f:
             for line in f:
@@ -303,7 +244,10 @@ def audit_export(
         to_dt = datetime.fromisoformat(to_ts)
         entries = [e for e in entries if e.get("timestamp", 0) <= to_dt.timestamp()]
 
-    root = compute_merkle_root(log_path) if log_path.exists() else "0x" + _sha3(b"").hex()
+    if log_path.exists():
+        root = compute_merkle_root(log_path)
+    else:
+        root = "0x" + _sha3(b"").hex()
 
     manifest = {
         "exported_at": datetime.now(timezone.utc).isoformat(),
@@ -339,16 +283,12 @@ def audit_export(
                         json.dumps(latest.to_dict(), indent=2, sort_keys=True),
                     )
             except Exception as e:
-                zf.writestr("anchor_error.txt", f"Could not fetch anchor: {e}\n")
+                zf.writestr("anchor_error.txt", "Could not fetch anchor: " + str(e) + "\n")
 
     return output_path
 
 
-# =============================================================================
-# CLI — python -m recallspection.anchor ...
-# =============================================================================
-
-def _cli() -> int:
+def _cli():
     import argparse
 
     parser = argparse.ArgumentParser(prog="recallspection.anchor")
@@ -392,7 +332,7 @@ def _cli() -> int:
     if args.cmd == "verify":
         bucket = args.bucket or os.environ.get("RECALLSPECTION_S3_BUCKET")
         if not bucket:
-            print("RECALLSPECTION_S3_BUCKET not set", flush=True)
+            print("RECALLSPECTION_S3_BUCKET not set")
             return 2
         a = RemoteAnchorS3(bucket=bucket)
         print(json.dumps(a.verify(args.root), indent=2, sort_keys=True))
