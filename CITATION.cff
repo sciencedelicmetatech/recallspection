@@ -1,0 +1,38 @@
+cff-version: 1.2.0
+message: "If you use Recallspection or the ExactMemory–Recallspection Integrity Theorem in your work, please cite both the software and the paper."
+title: "Recallspection"
+abstract: "Tamper-evident exact memory for autonomous AI agents. get(k) returns the stored value or Err(Tamper); never silent wrong data."
+type: software
+authors:
+  - family-names: "Raell"
+    given-names: "Eliam"
+    affiliation: "Sciencedelic Metatech"
+repository-code: "https://github.com/sciencedelicmetatech/recallspection"
+url: "https://github.com/sciencedelicmetatech/recallspection"
+license: AGPL-3.0-or-later
+license-url: "https://www.gnu.org/licenses/agpl-3.0.html"
+version: "18.0.0"
+date-released: "2026-09-28"
+keywords:
+  - agent memory
+  - tamper-evident storage
+  - storage integrity
+  - AI agent security
+  - HMAC
+  - transparency log
+  - rollback detection
+  - S3 Object Lock
+  - EU AI Act
+  - exact memory
+preferred-citation:
+  type: article
+  title: "The ExactMemory-Recallspection Integrity Theorem: Write-Time Commitment for Tamper-Evident Agent Memory"
+  authors:
+    - family-names: "Raell"
+      given-names: "Eliam"
+      affiliation: "Sciencedelic Metatech"
+  year: 2026
+  month: 9
+  day: 30
+  doi: "10.5281/zenodo.23078584"
+  url: "https://doi.org/10.5281/zenodo.23078584"
