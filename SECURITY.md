@@ -115,16 +115,6 @@ Without an anchor, cross-session rollback is **undetectable**. This is a proven 
 | Trusted clock | Rollback detection assumes a trusted clock or authenticated anchor oracle | Deploy with trusted NTP or signed anchor responses |
 
 ---
-
-## Security-Relevant Configuration
-
-**Required in production:**
-
-```bash
-RECALLSPECTION_EXACT_SECRET="<32-byte secret>"
-RECALLSPECTION_ADMIN_KEY="<random key>"
-RECALLSPECTION_SIGNUP_SECRET="<random secret>"
-
 Disclosure Policy
  
 We follow coordinated disclosure:
@@ -135,3 +125,14 @@ We follow coordinated disclosure:
 5. We coordinate a disclosure date with the reporter.
 6. We publish a security advisory and credit the reporter. 
 We will not pursue legal action against researchers acting in good faith.
+
+---
+
+## Security-Relevant Configuration
+
+**Required in production:**
+
+```bash
+RECALLSPECTION_EXACT_SECRET="<32-byte secret>"
+RECALLSPECTION_ADMIN_KEY="<random key>"
+RECALLSPECTION_SIGNUP_SECRET="<random secret>"
