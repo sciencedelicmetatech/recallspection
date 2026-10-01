@@ -108,7 +108,7 @@ class TransparencyLog:
 class ExactMemory:
     VERSION = "3.0.1"
     
-    def __init__(self, keys: Dict[str, bytes], container_key_id: str = 'container', ttl_seconds: Optional[int]=None, log_path: str="./transparency.log", remote_anchor: Optional[RemoteAnchor]=None, require_log: bool=True, strict_rollback: bool=True):
+    def __init__(self, keys: Dict[str, bytes], container_key_id: str = 'container', ttl_seconds: Optional[int] = None, log_path: str = "./transparency.log", remote_anchor: Optional[RemoteAnchor] = None, require_log: bool = True, strict_rollback: bool = False):
         if container_key_id not in keys:
             raise ValueError(f"container_key_id '{container_key_id}' must exist in keys - which key signs? Explicitly required (v3.0.0 breaking change)")
         self.keys = keys
@@ -145,7 +145,8 @@ class ExactMemory:
         self.tombstones.pop(k, None)
         return record
 
-    if k in self.tombstones:
+    def get_with_status(self, k):
+        if k in self.tombstones:
             rec, tag = self.tombstones[k]
             if not hmac.compare_digest(tag, self._make_tag(rec['key_id'], rec)):
                 return None, "tampered"
@@ -154,6 +155,7 @@ class ExactMemory:
             if k in self.per_key_max:
                 return None, "tampered"
             return None, "missing"
+        rec, tag = self.store[k]
         if not hmac.compare_digest(tag, self._make_tag(rec['key_id'], rec)):
             return None, "tampered"
         if rec['version'] < self.per_key_max.get(k, 0):
