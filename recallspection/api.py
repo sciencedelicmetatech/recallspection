@@ -40,7 +40,7 @@ from datetime import datetime
 
 from fastapi import FastAPI, Header, HTTPException, Request, Depends
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, Field
 
 # --- Optional Stripe ---
@@ -68,6 +68,19 @@ STRIPE_PRICE_ENTERPRISE = os.getenv("STRIPE_PRICE_ENTERPRISE", "price_ent_249")
 
 if STRIPE_AVAILABLE and STRIPE_SECRET:
     stripe.api_key = STRIPE_SECRET
+
+# --- Landing page path ---
+# api.py lives at repo_root/recallspection/api.py (or src/recallspection/api.py).
+# Try both layouts so it works either way.
+_THIS_FILE = Path(__file__).resolve()
+_CANDIDATE_ROOTS = [
+    _THIS_FILE.parent.parent,          # repo_root/recallspection/api.py -> repo_root
+    _THIS_FILE.parent.parent.parent,   # repo_root/src/recallspection/api.py -> repo_root
+]
+INDEX_HTML = next(
+    (root / "index.html" for root in _CANDIDATE_ROOTS if (root / "index.html").exists()),
+    _CANDIDATE_ROOTS[0] / "index.html",
+)
 
 app = FastAPI(
     title="Recallspection API v3.2.0",
@@ -407,7 +420,7 @@ def billing_checkout(req: CheckoutRequest):
         "enterprise": STRIPE_PRICE_ENTERPRISE
     }
     price_id = price_map.get(req.tier)
-    if not price_id or price_id.startswith("price_") == False:
+    if not price_id or not price_id.startswith("price_"):
         price_id = None
 
     try:
@@ -449,7 +462,6 @@ async def stripe_webhook(request: Request):
 
     if event["type"] in ("checkout.session.completed", "customer.subscription.created", "customer.subscription.updated"):
         obj = event["data"]["object"]
-        email = obj.get("customer_email") or obj.get("customer_details", {}).get("email")
         customer_id = obj.get("customer") or obj.get("customer_id")
         tier = obj.get("metadata", {}).get("tier", "pro")
         try:
@@ -502,13 +514,21 @@ def admin_consolidate(_=Depends(verify_admin)):
     except Exception as e:
         raise HTTPException(500, str(e))
 
-# --- Root ---
-@app.get("/")
+# --- Root: serve the landing page ---
+@app.get("/", response_class=HTMLResponse)
 def root():
-    return {
-        "name": "Recallspection API v3.2.0",
-        "docs": "/docs",
-        "health": "/health",
-        "dashboard": FRONTEND_URL,
-        "message": "Tamper-evident exact memory + collision-resistant SWSTM. get(k)=v_set ∨ Err(Tamper)"
-    }
+    if INDEX_HTML.exists():
+        return INDEX_HTML.read_text(encoding="utf-8")
+
+    # Fallback if index.html is missing from the deploy
+    return JSONResponse(
+        status_code=200,
+        content={
+            "name": "Recallspection API v3.2.0",
+            "docs": "/docs",
+            "health": "/health",
+            "dashboard": FRONTEND_URL,
+            "message": "index.html not found — serving JSON fallback. Check deploy includes it.",
+            "expected_path": str(INDEX_HTML),
+        },
+    )
