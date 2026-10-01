@@ -1,18 +1,22 @@
 """
-Recallspection – Dual-core exact memory for AI agents.
+recallspection — tamper-evident exact memory for autonomous AI agents.
 """
+
+from recallspection.anchor import (
+    AnchorRecord,
+    RemoteAnchorS3,
+    anchor_root,
+    audit_export,
+    compute_merkle_root,
+)
 
 __version__ = "18.0.0"
 
 __all__ = [
-    "ExactMemory",
-    "HybridEngine",
-    "SWSTMEngine",
-    "SWSTMCore",
+    "AnchorRecord",
+    "RemoteAnchorS3",
+    "anchor_root",
+    "audit_export",
+    "compute_merkle_root",
+    "__version__",
 ]
-
-def __getattr__(name):
-    if name in __all__:
-        from . import swstm
-        return getattr(swstm, name)
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
