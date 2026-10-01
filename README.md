@@ -17,9 +17,6 @@
 [![IETF](https://img.shields.io/badge/IETF%20Agent%20Record-inspired-6f42c1)](https://datatracker.ietf.org/)
 [![License](https://img.shields.io/badge/License-AGPL--3.0%20%7C%20Commercial-blue)](LICENSE)
 [![Status](https://img.shields.io/badge/status-anchor--ready-success)]()
-
-[![PyPI version](https://img.shields.io/pypi/v/recallspection?logo=pypi&logoColor=white)](https://pypi.org/project/recallspection/)
-[![PyPI downloads](https://img.shields.io/pypi/dm/recallspection?logo=pypi&logoColor=white)](https://pypi.org/project/recallspection/)
 [![DOI](https://img.shields.io/badge/DOI-10.5281%2Fzenodo.23078584-blue?logo=zenodo&logoColor=white)](https://doi.org/10.5281/zenodo.23078584)
 
 </div>
@@ -36,12 +33,17 @@ Single-slot memory (Mem0/Zep style) under 5× overload:
 | SWSTM Bucket-8 | 97.45 % | 0 % |
 | **Recallspection (hybrid exact-first)** | **100 %** | **0 %** |
 
-Under load, naive stores return **another key's fact 80 % of the time** — the exact failure mode HaluMem (Jan 2026) documents. Recallspection never silently swaps facts.
+Under load, naive stores return **another key's fact 80 % of the time** the exact failure mode HaluMem (Jan 2026) documents. Recallspection never silently swaps facts.
 
 ---
 
 ## Install
 
 ```bash
-pip install recallspection
-pip install recallspection[anchor]   # adds boto3 for S3 anchor
+git clone https://github.com/sciencedelicmetatech/recallspection.git
+cd recallspection
+python -m venv .venv && source .venv/bin/activate
+pip install -e ".[all]"
+
+# For the S3 anchor path only:
+pip install -e ".[anchor]"
