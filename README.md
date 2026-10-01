@@ -19,7 +19,7 @@
 [![Status](https://img.shields.io/badge/status-anchor--ready-success)]()
 [![PyPI](https://img.shields.io/badge/pypi-exactmemory--recallspection-orange)](https://pypi.org/project/exactmemory-recallspection/)
 [![Downloads](https://img.shields.io/badge/downloads-1k%2Fmonth-brightgreen)]()
-[![DOI](https://img.shields.io/badge/DOI-10.5281%2Fzenodo.xxxxxxx-blue)]()
+[![DOI](https://img.shields.io/badge/https://doi.org/10.5281/zenodo.23078584-blue)]()
 
 </div>
 
