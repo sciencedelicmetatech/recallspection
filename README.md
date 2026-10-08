@@ -40,6 +40,32 @@ Single-slot memory (Mem0/Zep style) under 5× overload:
 Under load, naive stores return another key's fact 80 % of the time, the exact failure mode HaluMem (Jan 2026) documents. Recallspection never silently swaps facts.
 
 ---
+# Verification artifacts
+
+Machine-checked companions to the five papers in this repository. Every artifact runs in under a minute and does not depend on the product code.
+
+## Tiers
+
+Each theorem ships with artifacts at up to three tiers. The tiers are cumulative: an artifact at a higher tier proves more, but does not replace the lower-tier check, because the lower-tier check confirms that the higher-tier claim is about the right thing.
+
+| Tier | Tool | What it establishes |
+|---|---|---|
+| Existence | Python | A concrete collapse on a bounded model. Does not prove the theorem. |
+| Structural | Z3 (SMT) | The attack encoding is consistent. In-scope: UNSAT. Out-of-scope: SAT. Does not prove the theorem. |
+| Proof | Lean 4 | The deterministic core of the theorem. No `sorry`. |
+
+No Python or Z3 artifact proves the full probabilistic or computational claim. Each paper's verification-tiers section states this explicitly. The Lean artifact proves the deterministic core.
+
+---
+
+## Python + Z3 artifacts
+
+One file runs all four checks. Zero external dependencies for the bounded checks. Z3 required for the SMT conformance tests.
+
+---
+
+```bash
+python verification/necessity.py
 
 ## Install
 
