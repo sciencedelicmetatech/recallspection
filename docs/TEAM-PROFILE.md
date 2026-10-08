@@ -168,7 +168,7 @@ DOI: 10.5281/zenodo.23199032.
 Theorem: Projection Integrity Requires Read-Side Witnesses.*
 Zenodo, forthcoming, Oct 2026.
 
-[5] Tech4biz Solutions. *agmi: Agent Memory Integrity — A Conformance
+[5] Tech4biz Solutions. *agmi: Agent Memory Integrity: A Conformance
 Test Suite for Tamper Evidence in AI Agent Memory and Checkpoint
 Stores.* Zenodo, version 0.6.0, Sept 2026.
 DOI: 10.5281/zenodo.22765627.
@@ -177,6 +177,6 @@ DOI: 10.5281/zenodo.22765627.
 
 ## Author's Address
 
-Eliam Raell
-Sciencedelic Metatech
-Email: eliam@yandex.com
+Eliam Raell,
+Sciencedelic Metatech,
+Email: eliamraell@yandex.com
