@@ -66,6 +66,7 @@ One file runs all four checks. Zero external dependencies for the bounded checks
 
 ```bash
 python verification/necessity.py
+```
 
 ## Install
 
@@ -73,3 +74,4 @@ Core (zero external deps beyond Python 3.10+):
 
 ```bash
 pip install git+https://github.com/sciencedelicmetatech/recallspection.git
+```
