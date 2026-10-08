@@ -1,0 +1,6 @@
+name = "Recallspection"
+version = "3.0.0"
+defaultTargets = ["Recallspection"]
+
+[[lean_lib]]
+name = "Recallspection"
