@@ -73,5 +73,8 @@ python verification/necessity.py
 Core (zero external deps beyond Python 3.10+):
 
 ```bash
+# Standard install
 pip install git+https://github.com/sciencedelicmetatech/recallspection.git
-```
+
+# If the above fails on a restricted network, use:
+pip install --no-build-isolation git+https://github.com/sciencedelicmetatech/recallspection.git
