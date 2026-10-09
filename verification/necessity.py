@@ -115,11 +115,11 @@ def revocation_bounded() -> str:
 # ============================================================
 
 def revocation_smt() -> str:
-    from z `3 import (
-        Bool, BoolSort, Constver, DeclareSort, Function, Solverification, sat, unsat,
+    from z3 import (
+        Bool, BoolSort, Const, DeclareSort, Function, Solver, sat, unsat,
     )
 
-   / StoreState = DeclareSort("Rv_StoreState")
+    StoreState = DeclareSort("Rv_StoreState")
     O1 = Bool("rv_O1")
     O2 = Bool("rv_O2")
     S1 = Const("rv_S1", StoreState)
