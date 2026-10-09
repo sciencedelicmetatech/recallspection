@@ -2,7 +2,7 @@
 
 **Version:** 0.1
 **Date:** 8 October 2026
-**Status:** Profile specification
+**Status:** Profile specification (self-published)
 **Author:** Eliam Raell, Sciencedelic Metatech
 
 ---
@@ -50,10 +50,19 @@ The key words "MUST", "MUST NOT", "SHOULD", and "MAY" in this document
 are to be interpreted as described in RFC 2119.
 
 **Exact hit.** A read for a key that was previously written and has not
-been deleted.
+been deleted. The distinction between a write and a subsequent read is
+determined by the store's own write history.
+
+**Non-hit statuses.** A read may also return a status indicating the key
+was never written (missing), that the record has expired (expired), or
+that the record is administratively invalidated (revoked, tombstoned).
+Section 3 does not constrain these statuses; they are governed by the
+store's own semantics.
 
 **Integrity failure.** An explicit error indicating the stored record
-cannot be authenticated or has been rolled back.
+cannot be authenticated or has been rolled back. A conforming store
+MUST signal integrity failure as a distinct outcome from any non-hit
+status.
 
 **Silent substitution.** Returning a value different from the last
 successfully written value for that key, without signalling an error.
@@ -72,6 +81,11 @@ On an exact hit a conforming store MUST either:
 (b) return an integrity failure.
 
 A conforming store MUST NOT perform silent substitution.
+
+For non-hit statuses (missing, expired, revoked, tombstoned), this
+profile does not constrain the return value. A store MAY return any
+value or signal, provided it is distinguishable from an exact hit and
+from an integrity failure.
 
 ---
 
@@ -97,7 +111,8 @@ against state outside the store (Paper 3 [3]).
 A conforming store that must detect read-path projection substitution
 MUST receive a read-side witness signed by the delivery channel or an
 independent monitor, and verify it against the bytes actually received
-(Paper 4 [4]).
+(Paper 4 [4]). This requirement is provisional pending publication of
+Paper 4.
 
 ---
 
@@ -117,8 +132,14 @@ A store claims conformance to this profile only if it passes a
 published black-box test suite that attempts modification, replay, and
 rollback and verifies that silent substitution never occurs.
 
-The `agmi` conformance suite [5] is one such suite. Equivalent suites
-that exercise the same three attack classes are acceptable.
+A published suite for this purpose means a suite whose source is
+publicly available, whose test vectors are reproducible, and whose pass
+criteria are documented. The `agmi` conformance suite [5] is one such
+suite. Equivalent suites that exercise the same three attack classes
+are acceptable, provided they are published under the same conditions.
+
+A store claiming conformance MUST publish the specific suite version it
+was tested against and the results of that run.
 
 ---
 
@@ -143,7 +164,10 @@ implies.
 
 ## 8. IANA Considerations
 
-This document has no IANA actions.
+This section is included to preserve the standard document layout. This
+document is not an IETF submission and has no IANA actions. Parties
+wishing to register a conformance marker for this profile should
+propose it through an appropriate venue.
 
 ---
 
@@ -154,17 +178,17 @@ Theorem: Write-Time Commitment for Tamper-Evident Agent Memory.*
 Zenodo, version 1.0.0, Oct 2026.
 DOI: 10.5281/zenodo.23078584.
 
-[2] Sciencedelic Metatech. *Raell's Rollback Indistinguishability
-Theorem: A Machine-Checked Necessity Result for Agent Memory
-Integrity.* Zenodo, version 2.0.0, Oct 2026.
+[2] Sciencedelic Metatech. *The Rollback Indistinguishability Theorem:
+A Machine-Checked Necessity Result for Agent Memory Integrity.*
+Zenodo, version 2.0.0, Oct 2026.
 DOI: 10.5281/zenodo.23188770.
 
-[3] Sciencedelic Metatech. *Raell's Revocation Indistinguishability
+[3] Sciencedelic Metatech. *The Revocation Indistinguishability
 Theorem: External Eligibility Is Necessary for Record Invalidation.*
 Zenodo, version 1.0.0, Oct 2026.
 DOI: 10.5281/zenodo.23199032.
 
-[4] Sciencedelic Metatech. *Raell's Read-Path Indistinguishability
+[4] Sciencedelic Metatech. *The Read-Path Indistinguishability
 Theorem: Projection Integrity Requires Read-Side Witnesses.*
 Zenodo, forthcoming, Oct 2026.
 
