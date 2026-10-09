@@ -178,17 +178,17 @@ Theorem: Write-Time Commitment for Tamper-Evident Agent Memory.*
 Zenodo, version 1.0.0, Oct 2026.
 DOI: 10.5281/zenodo.23078584.
 
-[2] Sciencedelic Metatech. *The Rollback Indistinguishability Theorem:
-A Machine-Checked Necessity Result for Agent Memory Integrity.*
-Zenodo, version 2.0.0, Oct 2026.
+[2] Sciencedelic Metatech. *Raell's Rollback Indistinguishability
+Theorem: A Machine-Checked Necessity Result for Agent Memory
+Integrity.* Zenodo, version 2.0.0, Oct 2026.
 DOI: 10.5281/zenodo.23188770.
 
-[3] Sciencedelic Metatech. *The Revocation Indistinguishability
+[3] Sciencedelic Metatech. *Raell's Revocation Indistinguishability
 Theorem: External Eligibility Is Necessary for Record Invalidation.*
 Zenodo, version 1.0.0, Oct 2026.
 DOI: 10.5281/zenodo.23199032.
 
-[4] Sciencedelic Metatech. *The Read-Path Indistinguishability
+[4] Sciencedelic Metatech. *Raell's Read-Path Indistinguishability
 Theorem: Projection Integrity Requires Read-Side Witnesses.*
 Zenodo, forthcoming, Oct 2026.
 
