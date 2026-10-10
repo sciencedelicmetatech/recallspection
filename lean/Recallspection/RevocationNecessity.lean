@@ -35,6 +35,6 @@ theorem soundness_impossible
   False := by
   obtain ⟨hS, hr⟩ := h_same
   rw [hS, hr] at h_sound_1
-  exact h_diff (h_sound_1.trans h_sound_2.symm)
+  exact h_diff (h_sound_1.symm.trans h_sound_2)
 
 end Recallspection.Revocation
