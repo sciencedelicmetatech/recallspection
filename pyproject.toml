@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=68", "wheel"]
+requires = ["setuptools>=77", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -8,7 +8,8 @@ version = "18.0.0"
 description = "Tamper-evident exact memory for autonomous AI agents. get(k) returns the stored value or Err(Tamper); never silent wrong data."
 readme = "README.md"
 requires-python = ">=3.10"
-license = { text = "AGPL-3.0-or-later OR LicenseRef-RIL-1.0" }
+license = "AGPL-3.0-or-later OR LicenseRef-RIL-1.0"
+license-files = ["LICENSE", "LICENSE-COMMERCIAL", "LICENSE-ARTIFACTS"]
 authors = [
     { name = "Eliam Raell", email = "eliam@sciencedelicmetatech.com" }
 ]
@@ -30,7 +31,6 @@ classifiers = [
     "Development Status :: 5 - Production/Stable",
     "Intended Audience :: Developers",
     "Intended Audience :: Science/Research",
-    "License :: OSI Approved :: GNU Affero General Public License v3 or later (AGPLv3+)",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
