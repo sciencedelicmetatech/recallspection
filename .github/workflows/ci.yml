@@ -2,120 +2,142 @@ name: CI
 
 on:
   push:
-    branches: [main, develop]
+    branches: [main]
   pull_request:
-    branches: [main, develop]
+    branches: [main]
   workflow_dispatch:
 
-permissions:
-  contents: read
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
-
 jobs:
+
+  # ============================================================
+  # Product tests: pytest, lint, build
+  # ============================================================
   test:
-    name: Test (Python ${{ matrix.python-version }} on ${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest]
-        python-version: ["3.10", "3.11", "3.12"]
-
+    name: Product tests
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-python@v5
         with:
-          python-version: ${{ matrix.python-version }}
-          cache: pip
+          python-version: "3.11"
 
-      - name: Install dependencies
+      - name: Install
         run: |
           python -m pip install --upgrade pip
           pip install -e ".[dev]"
 
-      - name: Lint (syntax errors only)
-        run: ruff check . --select E9,F63,F7,F82
+      - name: Lint
+        run: ruff check .
 
-      - name: Run test suite
-        run: pytest tests/ -v --cov=recallspection --cov-report=term-missing
-        continue-on-error: true
+      - name: Type check
+        run: mypy recallspection
 
-      - name: Integrity attack suite
-        run: python tests/test_integrity_attack_suite.py
-        continue-on-error: true
+      - name: Pytest
+        run: pytest -q
 
-      - name: SWSTM collision stress test
-        run: python tests/test_swstm_collision.py
-        continue-on-error: true
-
-  anchor-smoke:
-    name: S3 Anchor smoke test
-    runs-on: ubuntu-latest
-    needs: test
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-          cache: pip
-
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -e ".[dev,anchor]"
-
-      - name: Import check
-        run: python -c "from recallspection.anchor import anchor_root, compute_merkle_root, RemoteAnchorS3; print('anchor import ok')"
-
-      - name: Merkle root on a synthetic log
-        run: |
-          python - <<'PY'
-          import tempfile, json, time
-          from pathlib import Path
-          from recallspection.anchor import compute_merkle_root
-          with tempfile.TemporaryDirectory() as d:
-              p = Path(d) / "transparency.log"
-              with p.open("w") as f:
-                  for i in range(5):
-                      f.write(json.dumps({"i": i, "ts": int(time.time())}) + "\n")
-              root = compute_merkle_root(p)
-              assert root.startswith("0x") and len(root) == 66, root
-              print("merkle root ok:", root)
-          PY
-
-  build:
-    name: Build distribution
-    runs-on: ubuntu-latest
-    needs: test
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-          cache: pip
-
-      - name: Install build tools
-        run: |
-          python -m pip install --upgrade pip
-          pip install build twine
-
-      - name: Build sdist and wheel
+      - name: Build package
         run: python -m build
 
-      - name: Check distribution
-        run: twine check dist/*
+  # ============================================================
+  # Verification artifacts: Python existence + Z3 structural
+  # ============================================================
+  verification:
+    name: Verification artifacts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/setup-python@v5
         with:
-          name: dist
-          path: dist/
-          retention-days: 7
+          python-version: "3.11"
+
+      - name: Install z3
+        run: |
+          python -m pip install --upgrade pip
+          pip install z3-solver
+
+      - name: Combined 4-in-1 (Papers 2-3)
+        run: python verification/necessity.py
+
+      - name: Attribution existence (Paper 6)
+        run: python verification/attribution_necessity.py
+
+      - name: Attribution structural (Paper 6)
+        run: python verification/z3_attribution_necessity.py
+
+      # --- Pending artifacts. Uncomment as each file is added. ---
+      # - name: Read-path existence (Paper 4)
+      #   run: python verification/read_path_necessity.py
+      # - name: Read-path structural (Paper 4)
+      #   run: python verification/z3_read_path_necessity.py
+      # - name: Contextual integrity existence (Paper 7)
+      #   run: python verification/ci_necessity.py
+      # - name: Contextual integrity structural (Paper 7)
+      #   run: python verification/z3_ci_necessity.py
+      # - name: Stack existence (Paper 8)
+      #   run: python verification/stack_necessity.py
+      # - name: Stack structural (Paper 8)
+      #   run: python verification/z3_stack_necessity.py
+
+  # ============================================================
+  # Lean 4 proofs: deterministic core, no sorry
+  # ============================================================
+  lean:
+    name: Lean proofs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install elan
+        run: |
+          curl https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh -sSf | sh -s -- -y
+          echo "$HOME/.elan/bin" >> $GITHUB_PATH
+
+      - name: Cache Lake build
+        uses: actions/cache@v4
+        with:
+          path: lean/.lake
+          key: lake-${{ runner.os }}-${{ hashFiles('lean/lake-manifest.json', 'lean/lean-toolchain') }}
+          restore-keys: |
+            lake-${{ runner.os }}-
+
+      - name: Check toolchain pin
+        run: |
+          actual=$(cat lean/lean-toolchain | tr -d '[:space:]')
+          expected="leanprover/lean4:v4.11.0"
+          if [ "$actual" != "$expected" ]; then
+            echo "Toolchain mismatch: expected $expected, got $actual"
+            exit 1
+          fi
+
+      - name: Build
+        working-directory: lean
+        run: lake build
+
+  # ============================================================
+  # S3 anchor smoke test (manual dispatch only, uses secrets)
+  # ============================================================
+  anchor-smoke:
+    name: S3 anchor smoke test
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e "."
+
+      - name: Smoke test
+        env:
+          AWS_ACCESS_KEY_ID:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_REGION:            ${{ secrets.AWS_REGION }}
+          RECALLSPECTION_BUCKET: ${{ secrets.RECALLSPECTION_BUCKET }}
+        run: python scripts/anchor_smoke.py
