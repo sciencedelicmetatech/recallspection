@@ -5,6 +5,7 @@ Recallspection v3.2.0 Production API
 - Stripe billing (checkout, portal, webhook) -> pays Sciencedelic Metatech
 - One-click deploy ready (Render/Railway/Fly)
 - Fail-closed admin, constant-time compare, payload limits, atomic saves
+- Customer dashboard at /dashboard (Memory, Verify, Shadow, Export)
 
 v3.2.0 changes:
 - Fail-loud on store load: FormatVersionError / TamperError / RollbackError /
@@ -12,6 +13,8 @@ v3.2.0 changes:
 - /get blocks fuzzy fallback for terminal exact statuses:
   tampered, revoked, tombstoned, expired.
 - /exact/get returns "terminal" boolean.
+- /add propagates put() return value (ok | rejected), no silent "stored".
+- Dashboard endpoints mounted.
 
 Env:
   RECALLSPECTION_EXACT_SECRET - master secret for ExactMemory keys (required prod)
@@ -33,6 +36,7 @@ import hashlib
 import sqlite3
 import time
 import json
+import tempfile
 import threading
 from pathlib import Path
 from typing import Optional, Literal, Dict, Any
@@ -40,7 +44,8 @@ from datetime import datetime
 
 from fastapi import FastAPI, Header, HTTPException, Request, Depends
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, FileResponse
+from starlette.background import BackgroundTask
 from pydantic import BaseModel, Field
 
 # --- Optional Stripe ---
@@ -70,8 +75,6 @@ if STRIPE_AVAILABLE and STRIPE_SECRET:
     stripe.api_key = STRIPE_SECRET
 
 # --- Landing page path ---
-# api.py lives at repo_root/recallspection/api.py (or src/recallspection/api.py).
-# Try both layouts so it works either way.
 _THIS_FILE = Path(__file__).resolve()
 _CANDIDATE_ROOTS = [
     _THIS_FILE.parent.parent,          # repo_root/recallspection/api.py -> repo_root
@@ -82,9 +85,12 @@ INDEX_HTML = next(
     _CANDIDATE_ROOTS[0] / "index.html",
 )
 
+# --- Dashboard static dir (co-located with this file) ---
+STATIC_DIR = _THIS_FILE.parent / "static"
+
 app = FastAPI(
     title="Recallspection API v3.2.0",
-    description="Tamper-evident exact memory + collision-resistant SWSTM. TL;DR get(k)=v_set ∨ Err(Tamper)",
+    description="Tamper-evident exact memory + collision-resistant SWSTM. TL;DR get(k)=v_set or Err(Tamper)",
     version="3.2.0"
 )
 
@@ -143,7 +149,7 @@ def const_eq(a: str, b: str) -> bool:
 exact_memory = None
 exact_keys = None
 try:
-    from exactmemory import (
+    from exactmemory.recallspection import (
         ExactMemory,
         FormatVersionError,
         TamperError,
@@ -157,7 +163,6 @@ try:
         "container": hashlib.sha256(b"container-salt-" + hashlib.sha256(master).digest()).digest(),
     }
     exact_memory = ExactMemory(keys=exact_keys, container_key_id="container", require_log=True)
-    # Load if exists
     if Path(MEMORY_FILE).exists():
         try:
             exact_memory.load(MEMORY_FILE)
@@ -330,8 +335,8 @@ def add_fact(req: AddRequest, auth=Depends(verify_api_key)):
         if backend in ("exact", "hybrid"):
             if not exact_memory:
                 raise HTTPException(500, "ExactMemory not loaded")
-            exact_memory.put(req.key, req.value, key_id="agent_key")
-            result["exact"] = "ok"
+            put_status = exact_memory.put(req.key, req.value, key_id="agent_key", source="admin")
+            result["exact"] = put_status
         if backend in ("swstm", "hybrid"):
             if hybrid:
                 hybrid.add(req.key, req.value)
@@ -341,6 +346,8 @@ def add_fact(req: AddRequest, auth=Depends(verify_api_key)):
         if hybrid:
             hybrid.save(SWSTM_FILE)
         return {"key": req.key, "backend": backend, "result": result, "status": "stored"}
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(500, f"Add failed: {str(e)[:500]}")
 
@@ -354,9 +361,7 @@ def get_fact(key: str, top_k: int = 1, auth=Depends(verify_api_key)):
             if status == "ok" and val is not None:
                 return {"key": key, "value": val, "source": "exact", "status": status, "tamper": False}
 
-            # Terminal exact-layer statuses. Do NOT fall through to SWSTM:
-            # the fuzzy layer must not answer for a key the exact layer has
-            # flagged as tampered, revoked, expired, or tombstoned.
+            # Terminal exact-layer statuses. Do NOT fall through to SWSTM.
             if status == "tampered":
                 return {"key": key, "value": None, "source": "exact", "status": "tampered",
                         "tamper": True,
@@ -373,9 +378,6 @@ def get_fact(key: str, top_k: int = 1, auth=Depends(verify_api_key)):
                 return {"key": key, "value": None, "source": "exact", "status": "expired",
                         "tamper": False,
                         "detail": "Record expired (TTL). Not eligible for fuzzy fallback."}
-
-            # Only "missing" reaches here: the exact layer has no record.
-            # Fuzzy fallback is allowed.
 
         if hybrid:
             res = hybrid.get(key, top_k=top_k)
@@ -520,7 +522,6 @@ def root():
     if INDEX_HTML.exists():
         return INDEX_HTML.read_text(encoding="utf-8")
 
-    # Fallback if index.html is missing from the deploy
     return JSONResponse(
         status_code=200,
         content={
@@ -528,7 +529,136 @@ def root():
             "docs": "/docs",
             "health": "/health",
             "dashboard": FRONTEND_URL,
-            "message": "index.html not found — serving JSON fallback. Check deploy includes it.",
+            "message": "index.html not found - serving JSON fallback. Check deploy includes it.",
             "expected_path": str(INDEX_HTML),
         },
+    )
+
+# =====================================================================
+# --- Customer-facing dashboard ---
+# =====================================================================
+_STATUS_TO_BADGE: Dict[str, str] = {
+    "ok": "green",
+    "missing": "yellow",
+    "tampered": "red",
+    "tombstoned": "red",
+    "revoked": "red",
+    "expired": "red",
+}
+
+@app.get("/dashboard", response_class=HTMLResponse)
+def dashboard_page():
+    html_path = STATIC_DIR / "dashboard.html"
+    if not html_path.exists():
+        raise HTTPException(404, "Dashboard asset missing from deploy")
+    return HTMLResponse(content=html_path.read_text(encoding="utf-8"))
+
+@app.get("/dashboard/memory")
+def dashboard_memory(auth=Depends(verify_api_key)):
+    if not exact_memory:
+        return {"keys": [], "exact_loaded": False}
+    out = []
+    for k in list(exact_memory.store.keys()):
+        rec, tag = exact_memory.store[k]
+        if hasattr(exact_memory, "verify_record"):
+            valid = exact_memory.verify_record(k)
+        else:
+            valid = hmac.compare_digest(tag, exact_memory._make_tag(rec["key_id"], rec))
+        out.append({
+            "key": k,
+            "value": rec.get("value"),
+            "version": rec.get("version"),
+            "hmac_status": "valid" if valid else "invalid",
+            "anchor_time": rec.get("timestamp"),
+            "source": rec.get("source"),
+            "trusted": rec.get("trusted", False),
+            "revoked": rec.get("revoked", False),
+            "shadow_count": len(rec.get("shadow", [])),
+        })
+    return {"keys": out, "exact_loaded": True, "store_format": exact_memory.VERSION}
+
+@app.get("/dashboard/memory/{key}/history")
+def dashboard_history(key: str, auth=Depends(verify_api_key)):
+    if not exact_memory:
+        raise HTTPException(503, "ExactMemory not loaded")
+    if key not in exact_memory.store:
+        return {"key": key, "versions": []}
+    rec, _tag = exact_memory.store[key]
+    if hasattr(exact_memory, "verify_record"):
+        valid = exact_memory.verify_record(key)
+    else:
+        valid = hmac.compare_digest(_tag, exact_memory._make_tag(rec["key_id"], rec))
+    tip = exact_memory.log.get_tip() if exact_memory.log else None
+    return {
+        "key": key,
+        "versions": [{
+            "version": rec.get("version"),
+            "timestamp": rec.get("timestamp"),
+            "hmac_valid": valid,
+            "anchor_status": "anchored" if tip else "unanchored",
+            "prev_hash": tip.get("prev_hash") if tip else None,
+            "root": tip.get("chain_hash") if tip else None,
+            "is_rollback": False,
+        }],
+        "note": "ExactMemory v3.2.0 retains one record per key. Per-key version history is not persisted.",
+    }
+
+@app.get("/dashboard/memory/{key}/verify")
+def dashboard_verify(key: str, auth=Depends(verify_api_key)):
+    if not exact_memory:
+        raise HTTPException(503, "ExactMemory not loaded")
+    if hasattr(exact_memory, "get_with_status"):
+        _val, status = exact_memory.get_with_status(key)
+    else:
+        v = exact_memory.get(key)
+        status = "ok" if v is not None else "missing"
+    state = _STATUS_TO_BADGE.get(status, "yellow")
+
+    anchor_time = None
+    anchor_chain_hash = None
+    if exact_memory.remote_anchor:
+        try:
+            latest = exact_memory.remote_anchor.get_latest()
+            if latest is not None:
+                anchor_time = getattr(latest, "anchored_at", None)
+                anchor_chain_hash = getattr(latest, "chain_hash", None)
+        except Exception as e:
+            print(f"[dashboard] anchor lookup failed: {e}")
+
+    return {
+        "key": key,
+        "state": state,
+        "status": status,
+        "anchor_time": anchor_time,
+        "anchor_chain_hash": anchor_chain_hash,
+        "hmac_status": "valid" if status == "ok" else status,
+    }
+
+@app.get("/dashboard/memory/{key}/shadow")
+def dashboard_shadow(key: str, auth=Depends(verify_api_key)):
+    if not exact_memory:
+        raise HTTPException(503, "ExactMemory not loaded")
+    if not hasattr(exact_memory, "get_shadow"):
+        return {"key": key, "shadow": [], "note": "Loaded core predates CP1; shadow not available."}
+    return {"key": key, "shadow": exact_memory.get_shadow(key)}
+
+@app.get("/dashboard/export")
+def dashboard_export(auth=Depends(verify_api_key)):
+    try:
+        from recallspection.anchor import audit_export
+    except ImportError as e:
+        raise HTTPException(500, f"Export unavailable: {e}")
+    fd, tmp = tempfile.mkstemp(suffix=".zip")
+    os.close(fd)
+    try:
+        audit_export(EXACT_LOG, tmp)
+    except Exception as e:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+        raise HTTPException(500, f"Export failed: {str(e)[:300]}")
+    return FileResponse(
+        tmp,
+        media_type="application/zip",
+        filename="recallspection-evidence.zip",
+        background=BackgroundTask(lambda p=tmp: os.path.exists(p) and os.unlink(p)),
     )
