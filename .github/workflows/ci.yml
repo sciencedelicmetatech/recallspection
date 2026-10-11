@@ -117,12 +117,18 @@ jobs:
         run: lake build
 
   # ============================================================
-  # S3 anchor smoke test (manual dispatch only, uses secrets)
+  # S3 anchor smoke test
+  # Disabled until S3 secrets are configured in repo settings.
+  # To enable: set `if:` back to
+  #   if: github.event_name == 'workflow_dispatch'
+  # and add the four secrets:
+  #   AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION,
+  #   RECALLSPECTION_BUCKET
   # ============================================================
   anchor-smoke:
     name: S3 anchor smoke test
     runs-on: ubuntu-latest
-    if: github.event_name == 'workflow_dispatch'
+    if: false
     steps:
       - uses: actions/checkout@v4
 
