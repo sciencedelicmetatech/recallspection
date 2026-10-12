@@ -1,0 +1,378 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Recallspection</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #16161D;
+    --fg: #E8F4FF;
+    --accent: #A8D8F0;
+    --green: #4AE08A;
+    --yellow: #F0C84A;
+    --red: #FF5A5A;
+    --panel: #1E1E28;
+    --border: #2A2A36;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--fg);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    font-size: 15px;
+    line-height: 1.5;
+  }
+  header {
+    padding: 28px 32px 12px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-end;
+    gap: 24px;
+    flex-wrap: wrap;
+  }
+  .wordmark {
+    font-family: "Cinzel", serif;
+    font-weight: 700;
+    font-size: 34px;
+    letter-spacing: 0.04em;
+    background: linear-gradient(180deg, #FFFFFF 0%, #C8D8E8 35%, #8FA8C0 50%, #E8F4FF 65%, #FFFFFF 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+    text-shadow: 0 0 24px rgba(168, 216, 240, 0.15);
+  }
+  .subtitle {
+    color: var(--accent);
+    font-size: 13px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    margin-top: 4px;
+  }
+  .keybar {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+  }
+  .keybar input {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    color: var(--fg);
+    padding: 7px 10px;
+    border-radius: 4px;
+    font-family: inherit;
+    font-size: 13px;
+    width: 240px;
+  }
+  nav.tabs {
+    display: flex;
+    gap: 0;
+    padding: 0 32px;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg);
+  }
+  nav.tabs button {
+    background: none;
+    border: none;
+    color: var(--fg);
+    padding: 14px 22px;
+    font-size: 14px;
+    letter-spacing: 0.05em;
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+    opacity: 0.6;
+  }
+  nav.tabs button.active {
+    opacity: 1;
+    border-bottom-color: var(--accent);
+    color: var(--accent);
+  }
+  main { padding: 24px 32px 64px; max-width: 1100px; }
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 18px 20px;
+    margin-bottom: 18px;
+  }
+  h3 { margin-top: 0; color: var(--accent); font-weight: 500; }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  th, td { text-align: left; padding: 9px 10px; border-bottom: 1px solid var(--border); }
+  th { color: var(--accent); font-weight: 500; letter-spacing: 0.04em; font-size: 12px; text-transform: uppercase; }
+  tr:last-child td { border-bottom: none; }
+  code, .mono { font-family: "SF Mono", Menlo, Consolas, monospace; font-size: 12.5px; }
+  .badge {
+    display: inline-block;
+    padding: 2px 9px;
+    border-radius: 10px;
+    font-size: 11.5px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+  }
+  .badge.green { background: rgba(74, 224, 138, 0.16); color: var(--green); border: 1px solid rgba(74, 224, 138, 0.35); }
+  .badge.yellow { background: rgba(240, 200, 74, 0.16); color: var(--yellow); border: 1px solid rgba(240, 200, 74, 0.35); }
+  .badge.red { background: rgba(255, 90, 90, 0.16); color: var(--red); border: 1px solid rgba(255, 90, 90, 0.35); }
+  .muted { opacity: 0.55; font-size: 13px; }
+  button.action {
+    background: var(--accent);
+    color: var(--bg);
+    border: none;
+    padding: 9px 18px;
+    border-radius: 4px;
+    font-weight: 600;
+    font-size: 13px;
+    cursor: pointer;
+    letter-spacing: 0.03em;
+  }
+  button.action:hover { opacity: 0.85; }
+  .hidden { display: none; }
+  input.field {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    color: var(--fg);
+    padding: 8px 10px;
+    border-radius: 4px;
+    font-family: inherit;
+  }
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <div class="wordmark">Recallspection</div>
+    <div class="subtitle">Tamper-evident exact memory</div>
+  </div>
+  <div class="keybar">
+    <input id="api-key" type="password" placeholder="X-API-Key" autocomplete="off">
+    <button class="action" id="save-key-btn">Save</button>
+  </div>
+</header>
+
+<nav class="tabs">
+  <button data-tab="memory" class="active">Memory</button>
+  <button data-tab="timeline">Timeline</button>
+  <button data-tab="shadow">Shadow</button>
+  <button data-tab="export">Export</button>
+</nav>
+
+<main>
+  <section id="tab-memory">
+    <div class="panel">
+      <h3>Stored keys</h3>
+      <table id="memory-table">
+        <thead><tr><th>Key</th><th>Version</th><th>HMAC</th><th>Anchor</th></tr></thead>
+        <tbody><tr><td colspan="4" class="muted">Loading...</td></tr></tbody>
+      </table>
+    </div>
+    <div class="panel">
+      <h3>Verify a key</h3>
+      <input id="verify-key" class="field" placeholder="key name">
+      <button class="action" id="verify-btn" style="margin-left:8px;">Verify</button>
+      <div id="verify-result" style="margin-top:14px;"></div>
+    </div>
+  </section>
+
+  <section id="tab-timeline" class="hidden">
+    <div class="panel">
+      <h3>Key history</h3>
+      <input id="history-key" class="field" placeholder="key name">
+      <button class="action" id="history-btn" style="margin-left:8px;">Load</button>
+      <div id="history-result" style="margin-top:14px;"></div>
+    </div>
+  </section>
+
+  <section id="tab-shadow" class="hidden">
+    <div class="panel">
+      <h3>Shadow writes (rejected overwrites)</h3>
+      <input id="shadow-key" class="field" placeholder="key name">
+      <button class="action" id="shadow-btn" style="margin-left:8px;">Load</button>
+      <div id="shadow-result" style="margin-top:14px;"></div>
+    </div>
+  </section>
+
+  <section id="tab-export" class="hidden">
+    <div class="panel">
+      <h3>Evidence export</h3>
+      <p class="muted">Downloads the transparency log slice plus manifest as a zip. Format: EU AI Act Article 12 record-keeping evidence.</p>
+      <button class="action" id="export-btn">Download evidence zip</button>
+      <div id="export-result" style="margin-top:14px;"></div>
+    </div>
+  </section>
+</main>
+
+<script>
+const $ = (s) => document.querySelector(s);
+const $$ = (s) => document.querySelectorAll(s);
+
+function getKey() { return localStorage.getItem("rsc_key") || ""; }
+function setKey(k) { localStorage.setItem("rsc_key", k); }
+
+const savedKey = getKey();
+if (savedKey) $("#api-key").value = savedKey;
+
+$("#save-key-btn").addEventListener("click", () => {
+  setKey($("#api-key").value.trim());
+  $("#api-key").type = "password";
+  loadMemory();
+});
+
+async function apiFetch(path) {
+  const k = getKey();
+  if (!k) throw new Error("No API key set. Enter X-API-Key and click Save.");
+  const r = await fetch(path, { headers: { "X-API-Key": k } });
+  if (!r.ok) {
+    let msg = r.status + " " + r.statusText;
+    try { const j = await r.json(); msg = j.detail || msg; } catch (e) {}
+    throw new Error(msg);
+  }
+  return r;
+}
+
+$$("nav.tabs button").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    $$("nav.tabs button").forEach((b) => b.classList.remove("active"));
+    btn.classList.add("active");
+    ["memory", "timeline", "shadow", "export"].forEach((t) => {
+      $("#tab-" + t).classList.toggle("hidden", t !== btn.dataset.tab);
+    });
+  });
+});
+
+function badge(state) { return `<span class="badge ${state}">${state.toUpperCase()}</span>`; }
+
+function fmtTs(ts) {
+  if (!ts) return "—";
+  const d = new Date(typeof ts === "number" ? ts * 1000 : ts);
+  if (isNaN(d.getTime())) return String(ts);
+  return d.toISOString().replace("T", " ").slice(0, 19);
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+async function loadMemory() {
+  const tbody = $("#memory-table tbody");
+  tbody.innerHTML = '<tr><td colspan="4" class="muted">Loading...</td></tr>';
+  try {
+    const r = await apiFetch("/dashboard/memory");
+    const data = await r.json();
+    if (!data.exact_loaded) {
+      tbody.innerHTML = '<tr><td colspan="4" class="badge red">ExactMemory not loaded on server</td></tr>';
+      return;
+    }
+    if (!data.keys || !data.keys.length) {
+      tbody.innerHTML = '<tr><td colspan="4" class="muted">No keys stored.</td></tr>';
+      return;
+    }
+    tbody.innerHTML = data.keys.map((k) => `
+      <tr>
+        <td class="mono">${escapeHtml(k.key)}</td>
+        <td>v${k.version ?? "—"}${k.revoked ? " " + badge("red") : ""}</td>
+        <td>${badge(k.hmac_status === "valid" ? "green" : "red")}</td>
+        <td class="mono">${fmtTs(k.anchor_time)}</td>
+      </tr>
+    `).join("");
+  } catch (e) {
+    tbody.innerHTML = `<tr><td colspan="4"><span class="badge red">${escapeHtml(e.message)}</span></td></tr>`;
+  }
+}
+
+async function verifyKey() {
+  const key = $("#verify-key").value.trim();
+  const out = $("#verify-result");
+  if (!key) { out.innerHTML = '<span class="muted">Enter a key.</span>'; return; }
+  try {
+    const r = await apiFetch(`/dashboard/memory/${encodeURIComponent(key)}/verify`);
+    const data = await r.json();
+    out.innerHTML = `
+      <div>State: ${badge(data.state)}</div>
+      <div class="muted" style="margin-top:6px;">Status: <span class="mono">${escapeHtml(data.status)}</span></div>
+      <div class="muted">Anchor time: <span class="mono">${fmtTs(data.anchor_time)}</span></div>
+      <div class="muted">HMAC: <span class="mono">${escapeHtml(data.hmac_status)}</span></div>
+    `;
+  } catch (e) {
+    out.innerHTML = `<span class="badge red">${escapeHtml(e.message)}</span>`;
+  }
+}
+
+async function loadHistory() {
+  const key = $("#history-key").value.trim();
+  const out = $("#history-result");
+  if (!key) { out.innerHTML = '<span class="muted">Enter a key.</span>'; return; }
+  try {
+    const r = await apiFetch(`/dashboard/memory/${encodeURIComponent(key)}/history`);
+    const data = await r.json();
+    if (!data.versions || !data.versions.length) {
+      out.innerHTML = '<span class="muted">No versions found.</span>';
+      return;
+    }
+    out.innerHTML = `<table><thead><tr><th>Version</th><th>Timestamp</th><th>HMAC</th><th>Anchor</th><th>Prev hash</th></tr></thead><tbody>` +
+      data.versions.map((v) => `
+        <tr>
+          <td>v${v.version ?? "—"}</td>
+          <td class="mono">${fmtTs(v.timestamp)}</td>
+          <td>${badge(v.hmac_valid ? "green" : "red")}</td>
+          <td>${v.anchor_status === "anchored" ? badge("green") : badge("yellow")}</td>
+          <td class="mono">${v.prev_hash ? escapeHtml(v.prev_hash.slice(0, 16)) + "..." : "—"}</td>
+        </tr>`).join("") + `</tbody></table>` +
+      (data.note ? `<div class="muted" style="margin-top:10px;">${escapeHtml(data.note)}</div>` : "");
+  } catch (e) {
+    out.innerHTML = `<span class="badge red">${escapeHtml(e.message)}</span>`;
+  }
+}
+
+async function loadShadow() {
+  const key = $("#shadow-key").value.trim();
+  const out = $("#shadow-result");
+  if (!key) { out.innerHTML = '<span class="muted">Enter a key.</span>'; return; }
+  try {
+    const r = await apiFetch(`/dashboard/memory/${encodeURIComponent(key)}/shadow`);
+    const data = await r.json();
+    if (!data.shadow || !data.shadow.length) {
+      out.innerHTML = '<span class="muted">No rejected writes for this key.</span>';
+      return;
+    }
+    out.innerHTML = `<table><thead><tr><th>Timestamp</th><th>Source</th><th>Rejected value</th></tr></thead><tbody>` +
+      data.shadow.map((s) => `
+        <tr>
+          <td class="mono">${fmtTs(s.ts)}</td>
+          <td class="mono">${escapeHtml(s.source || "—")}</td>
+          <td class="mono">${escapeHtml(String(s.value).slice(0, 200))}</td>
+        </tr>`).join("") + `</tbody></table>`;
+  } catch (e) {
+    out.innerHTML = `<span class="badge red">${escapeHtml(e.message)}</span>`;
+  }
+}
+
+$("#export-btn").addEventListener("click", async () => {
+  const out = $("#export-result");
+  out.innerHTML = '<span class="muted">Building zip...</span>';
+  try {
+    const r = await apiFetch("/dashboard/export");
+    const blob = await r.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "recallspection-evidence.zip";
+    a.click();
+    URL.revokeObjectURL(url);
+    out.innerHTML = '<span class="badge green">Downloaded</span>';
+  } catch (e) {
+    out.innerHTML = `<span class="badge red">${escapeHtml(e.message)}</span>`;
+  }
+});
+
+$("#verify-btn").addEventListener("click", verifyKey);
+$("#history-btn").addEventListener("click", loadHistory);
+$("#shadow-btn").addEventListener("click", loadShadow);
+
+loadMemory();
+</script>
+</body>
+</html>
