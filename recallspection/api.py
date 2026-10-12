@@ -6,6 +6,7 @@ Recallspection v3.2.0 Production API
 - One-click deploy ready (Render/Railway/Fly)
 - Fail-closed admin, constant-time compare, payload limits, atomic saves
 - Customer dashboard at /dashboard (Memory, Timeline, Shadow, Export)
+- External anchor: file backend by default, gates T9 rollback on load
 
 v3.2.0 changes:
 - Fail-loud on store load: FormatVersionError / TamperError / RollbackError /
@@ -15,6 +16,9 @@ v3.2.0 changes:
 - /exact/get returns "terminal" boolean.
 - /add propagates put() return value (ok | rejected), no silent "stored".
 - Dashboard endpoints mounted.
+- Anchor wiring: RECALLSPECTION_ANCHOR_BACKEND=file|s3|none. Default file.
+  File anchor writes a monotonic high-water mark. ExactMemory.load() compares
+  it to the log tip and raises RollbackError on rollback. T9 now rejected.
 
 Env:
   RECALLSPECTION_EXACT_SECRET - master secret for ExactMemory keys (required prod)
@@ -24,6 +28,10 @@ Env:
   RECALLSPECTION_SWSTM_FILE - /data/swstm.pt
   RECALLSPECTION_DB_FILE - /data/keys.db
   RECALLSPECTION_EXACT_LOG - /data/transparency.log
+  RECALLSPECTION_ANCHOR_BACKEND - file | s3 | none (default file)
+  RECALLSPECTION_ANCHOR_FILE - /data/anchor.json (file backend)
+  RECALLSPECTION_ANCHOR_BUCKET - S3 bucket (s3 backend)
+  RECALLSPECTION_ANCHOR_PREFIX - S3 prefix (s3 backend, default recallspection/)
   STRIPE_SECRET_KEY - sk_live_... (for billing)
   STRIPE_WEBHOOK_SECRET - whsec_...
   STRIPE_PRICE_PRO - price_... ($20/mo)
@@ -64,6 +72,11 @@ SWSTM_FILE = os.getenv("RECALLSPECTION_SWSTM_FILE", "./swstm.pt")
 DB_FILE = os.getenv("RECALLSPECTION_DB_FILE", "./keys.db")
 EXACT_LOG = os.getenv("RECALLSPECTION_EXACT_LOG", "./transparency.log")
 FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:3000")
+
+ANCHOR_BACKEND = os.getenv("RECALLSPECTION_ANCHOR_BACKEND", "file").strip().lower()
+ANCHOR_FILE = os.getenv("RECALLSPECTION_ANCHOR_FILE", "./anchor.json")
+ANCHOR_BUCKET = os.getenv("RECALLSPECTION_ANCHOR_BUCKET", "")
+ANCHOR_PREFIX = os.getenv("RECALLSPECTION_ANCHOR_PREFIX", "recallspection/")
 
 STRIPE_SECRET = os.getenv("STRIPE_SECRET_KEY", "")
 STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", "")
@@ -145,9 +158,87 @@ def hash_key(raw: str) -> str:
 def const_eq(a: str, b: str) -> bool:
     return hmac.compare_digest(a, b)
 
+# --- Anchor backends ---
+class FileAnchor:
+    """Durable file-based anchor. Monotonic high-water mark.
+
+    Writes a JSON file with max_version, chain_hash, container_hash,
+    anchored_at. Never lowers the mark. ExactMemory.load() reads this
+    and raises RollbackError if the log tip is below the mark.
+
+    Threat model honestly: an attacker who can write every file on the
+    same disk can roll back anchor.json too. This upgrades T9 from
+    "trivially accepted" (no anchor) to "attacker must also modify a
+    second file at a different path". For full off-store separation,
+    put anchor.json on a different volume, or use the s3 backend with
+    Object Lock, or a remote HTTP anchor service.
+    """
+    def __init__(self, path):
+        self.path = Path(path)
+        self._lock = threading.Lock()
+
+    def anchor(self, chain_hash, max_version, container_hash):
+        with self._lock:
+            try:
+                cur = self._read()
+                if cur and max_version <= cur.get("max_version", 0):
+                    return
+                self.path.parent.mkdir(parents=True, exist_ok=True)
+                data = {
+                    "max_version": max_version,
+                    "chain_hash": chain_hash,
+                    "container_hash": container_hash,
+                    "anchored_at": int(time.time()),
+                }
+                tmp = str(self.path) + ".tmp"
+                with open(tmp, "w") as f:
+                    f.write(json.dumps(data, sort_keys=True))
+                    f.flush()
+                    os.fsync(f.fileno())
+                os.replace(tmp, self.path)
+            except Exception as e:
+                print("[anchor] write failed: " + str(e)[:200])
+
+    def get_latest(self):
+        return self._read()
+
+    def verify(self, chain_hash):
+        cur = self._read()
+        return cur is not None and cur.get("chain_hash") == chain_hash
+
+    def _read(self):
+        if not self.path.exists():
+            return None
+        try:
+            return json.loads(self.path.read_text())
+        except Exception:
+            return None
+
+
+def _build_anchor():
+    if ANCHOR_BACKEND == "file":
+        print("[Anchor] file backend -> " + ANCHOR_FILE)
+        return FileAnchor(ANCHOR_FILE)
+    if ANCHOR_BACKEND == "s3":
+        try:
+            from recallspection.anchor import RemoteAnchorS3
+            a = RemoteAnchorS3(bucket=ANCHOR_BUCKET, prefix=ANCHOR_PREFIX)
+            print("[Anchor] s3 backend -> s3://" + ANCHOR_BUCKET + "/" + ANCHOR_PREFIX)
+            return a
+        except Exception as e:
+            print("[Anchor] s3 init failed: " + str(e) + " - falling back to file")
+            return FileAnchor(ANCHOR_FILE)
+    if ANCHOR_BACKEND == "none":
+        print("[Anchor] disabled - T9 (snapshot rollback) will be accepted")
+        return None
+    print("[Anchor] unknown backend '" + ANCHOR_BACKEND + "' - disabled")
+    return None
+
+
 # --- ExactMemory ---
 exact_memory = None
 exact_keys = None
+_anchor = None
 try:
     from exactmemory.recallspection import (
         ExactMemory,
@@ -162,7 +253,13 @@ try:
         "agent_key": hashlib.sha256(master).digest(),
         "container": hashlib.sha256(b"container-salt-" + hashlib.sha256(master).digest()).digest(),
     }
-    exact_memory = ExactMemory(keys=exact_keys, container_key_id="container", require_log=True)
+    _anchor = _build_anchor()
+    exact_memory = ExactMemory(
+        keys=exact_keys,
+        container_key_id="container",
+        require_log=True,
+        remote_anchor=_anchor,
+    )
     if Path(MEMORY_FILE).exists():
         try:
             exact_memory.load(MEMORY_FILE)
@@ -250,19 +347,45 @@ def verify_admin(x_admin_key: str = Header(None)):
         raise HTTPException(403, "Invalid admin key")
     return True
 
+# --- Anchor helpers ---
+def _anchor_snapshot():
+    """Normalize anchor state to a dict. Handles dict and dataclass returns."""
+    if _anchor is None:
+        return None
+    try:
+        latest = _anchor.get_latest()
+    except Exception as e:
+        return {"error": str(e)[:200]}
+    if latest is None:
+        return None
+    if isinstance(latest, dict):
+        return latest
+    return {
+        "max_version": getattr(latest, "max_version", None),
+        "chain_hash": getattr(latest, "chain_hash", None),
+        "anchored_at": getattr(latest, "anchored_at", None),
+        "container_hash": getattr(latest, "container_hash", None),
+    }
+
 # --- Endpoints ---
 @app.get("/health")
 def health():
+    anchor_state = _anchor_snapshot()
     return {
         "status": "ok",
         "version": "3.2.0",
         "exact_loaded": exact_memory is not None,
         "swstm_loaded": hybrid is not None,
         "store_format": exact_memory.VERSION if exact_memory else None,
+        "store_max_version": exact_memory.max_version if exact_memory else None,
         "memory_file": MEMORY_FILE,
         "swstm_file": SWSTM_FILE,
         "db_file": DB_FILE,
         "exact_log": EXACT_LOG,
+        "anchor_backend": ANCHOR_BACKEND,
+        "anchor_file": ANCHOR_FILE if ANCHOR_BACKEND == "file" else None,
+        "anchor_configured": _anchor is not None,
+        "anchor_max_version": anchor_state.get("max_version") if isinstance(anchor_state, dict) else None,
         "stripe_enabled": STRIPE_AVAILABLE and bool(STRIPE_SECRET),
         "timestamp": datetime.utcnow().isoformat()
     }
@@ -515,6 +638,19 @@ def admin_consolidate(_=Depends(verify_admin)):
     except Exception as e:
         raise HTTPException(500, str(e))
 
+@app.get("/admin/anchor")
+def admin_anchor(_=Depends(verify_admin)):
+    if exact_memory and _anchor:
+        try:
+            exact_memory.save(MEMORY_FILE)
+        except Exception as e:
+            raise HTTPException(500, f"save failed: {e}")
+    return {
+        "backend": ANCHOR_BACKEND,
+        "file": ANCHOR_FILE if ANCHOR_BACKEND == "file" else None,
+        "state": _anchor_snapshot(),
+    }
+
 # --- Root: serve the landing page ---
 @app.get("/", response_class=HTMLResponse)
 def root():
@@ -613,16 +749,12 @@ def dashboard_verify(key: str, auth=Depends(verify_api_key)):
         status = "ok" if v is not None else "missing"
     state = _STATUS_TO_BADGE.get(status, "yellow")
 
+    snapshot = _anchor_snapshot()
     anchor_time = None
     anchor_chain_hash = None
-    if exact_memory.remote_anchor:
-        try:
-            latest = exact_memory.remote_anchor.get_latest()
-            if latest is not None:
-                anchor_time = getattr(latest, "anchored_at", None)
-                anchor_chain_hash = getattr(latest, "chain_hash", None)
-        except Exception as e:
-            print(f"[dashboard] anchor lookup failed: {e}")
+    if isinstance(snapshot, dict):
+        anchor_time = snapshot.get("anchored_at")
+        anchor_chain_hash = snapshot.get("chain_hash")
 
     return {
         "key": key,
@@ -640,6 +772,18 @@ def dashboard_shadow(key: str, auth=Depends(verify_api_key)):
     if not hasattr(exact_memory, "get_shadow"):
         return {"key": key, "shadow": [], "note": "Loaded core predates CP1; shadow not available."}
     return {"key": key, "shadow": exact_memory.get_shadow(key)}
+
+@app.get("/dashboard/anchor")
+def dashboard_anchor(auth=Depends(verify_api_key)):
+    if not exact_memory:
+        raise HTTPException(503, "ExactMemory not loaded")
+    return {
+        "backend": ANCHOR_BACKEND,
+        "configured": _anchor is not None,
+        "file": ANCHOR_FILE if ANCHOR_BACKEND == "file" else None,
+        "latest": _anchor_snapshot(),
+        "store_max_version": exact_memory.max_version,
+    }
 
 @app.get("/dashboard/export")
 def dashboard_export(auth=Depends(verify_api_key)):
