@@ -11,10 +11,10 @@ requires-python = ">=3.10"
 license = "AGPL-3.0-or-later OR LicenseRef-RIL-1.0"
 license-files = ["LICENSE", "LICENSE-COMMERCIAL", "LICENSE-ARTIFACTS"]
 authors = [
-    { name = "Eliam Raell", email = "eliam@sciencedelicmetatech.com" }
+    { name = "Eliam Raell", email = "eliamraell@yandex.com" }
 ]
 maintainers = [
-    { name = "Sciencedelic Metatech", email = "maintainers@sciencedelicmetatech.com" }
+    { name = "Sciencedelic Metatech", email = "eliamraell@yandex.com" }
 ]
 keywords = [
     "agent memory",
@@ -92,7 +92,7 @@ packages = ["recallspection", "exactmemory_recallspection"]
 include-package-data = true
 
 [tool.setuptools.package-data]
-recallspection = ["py.typed"]
+recallspection = ["py.typed", "static/*.html"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
