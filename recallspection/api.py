@@ -5,7 +5,7 @@ Recallspection v3.2.0 Production API
 - Stripe billing (checkout, portal, webhook) -> pays Sciencedelic Metatech
 - One-click deploy ready (Render/Railway/Fly)
 - Fail-closed admin, constant-time compare, payload limits, atomic saves
-- Customer dashboard at /dashboard (Memory, Verify, Shadow, Export)
+- Customer dashboard at /dashboard (Memory, Timeline, Shadow, Export)
 
 v3.2.0 changes:
 - Fail-loud on store load: FormatVersionError / TamperError / RollbackError /
@@ -77,8 +77,8 @@ if STRIPE_AVAILABLE and STRIPE_SECRET:
 # --- Landing page path ---
 _THIS_FILE = Path(__file__).resolve()
 _CANDIDATE_ROOTS = [
-    _THIS_FILE.parent.parent,          # repo_root/recallspection/api.py -> repo_root
-    _THIS_FILE.parent.parent.parent,   # repo_root/src/recallspection/api.py -> repo_root
+    _THIS_FILE.parent.parent,
+    _THIS_FILE.parent.parent.parent,
 ]
 INDEX_HTML = next(
     (root / "index.html" for root in _CANDIDATE_ROOTS if (root / "index.html").exists()),
@@ -103,7 +103,7 @@ app.add_middleware(
 )
 
 # --- Payload size guard ---
-MAX_PAYLOAD = 1024 * 1024  # 1MB
+MAX_PAYLOAD = 1024 * 1024
 @app.middleware("http")
 async def check_payload_size(request: Request, call_next):
     if request.headers.get("content-length"):
@@ -361,7 +361,6 @@ def get_fact(key: str, top_k: int = 1, auth=Depends(verify_api_key)):
             if status == "ok" and val is not None:
                 return {"key": key, "value": val, "source": "exact", "status": status, "tamper": False}
 
-            # Terminal exact-layer statuses. Do NOT fall through to SWSTM.
             if status == "tampered":
                 return {"key": key, "value": None, "source": "exact", "status": "tampered",
                         "tamper": True,
