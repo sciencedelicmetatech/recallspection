@@ -2,3 +2,4 @@ fastapi
 uvicorn
 pydantic
 psycopg2-binary
+exactmemory.recallspection @ git+https://github.com/sciencedelicmetatech/exactmemory.recallspection.git@main
