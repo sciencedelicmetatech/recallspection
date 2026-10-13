@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=77", "wheel"]
+requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -8,8 +8,7 @@ version = "18.0.0"
 description = "Tamper-evident exact memory for autonomous AI agents. get(k) returns the stored value or Err(Tamper); never silent wrong data."
 readme = "README.md"
 requires-python = ">=3.10"
-license = "AGPL-3.0-or-later OR LicenseRef-RIL-1.0"
-license-files = ["LICENSE", "LICENSE-COMMERCIAL", "LICENSE-ARTIFACTS"]
+license = { text = "AGPL-3.0-or-later OR LicenseRef-RIL-1.0" }
 authors = [
     { name = "Eliam Raell", email = "eliamraell@yandex.com" }
 ]
@@ -123,13 +122,13 @@ exclude = [
 
 [tool.ruff.lint]
 select = [
-    "E9",   # syntax errors
-    "F63",  # invalid print/assert syntax
-    "F7",   # syntax errors in statements
-    "F82",  # undefined names
+    "E9",
+    "F63",
+    "F7",
+    "F82",
 ]
 ignore = [
-    "E501",  # line too long
+    "E501",
 ]
 
 [tool.mypy]
