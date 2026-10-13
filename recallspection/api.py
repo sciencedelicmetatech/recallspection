@@ -6,37 +6,8 @@ Recallspection v3.2.0 Production API
 - One-click deploy ready (Render/Railway/Fly)
 - Fail-closed admin, constant-time compare, payload limits, atomic saves
 - Customer dashboard at /dashboard (Memory, Timeline, Shadow, Export)
+- Eigengrau-themed API docs at /docs
 - External anchor: file backend by default, gates T9 rollback on load
-
-v3.2.0 changes:
-- Fail-loud on store load: FormatVersionError / TamperError / RollbackError /
-  LogCompromisedError cause SystemExit. No silent empty-store fallback.
-- /get blocks fuzzy fallback for terminal exact statuses:
-  tampered, revoked, tombstoned, expired.
-- /exact/get returns "terminal" boolean.
-- /add propagates put() return value (ok | rejected), no silent "stored".
-- Dashboard endpoints mounted.
-- Anchor wiring: RECALLSPECTION_ANCHOR_BACKEND=file|s3|none. Default file.
-  File anchor writes a monotonic high-water mark. ExactMemory.load() compares
-  it to the log tip and raises RollbackError on rollback. T9 now rejected.
-
-Env:
-  RECALLSPECTION_EXACT_SECRET - master secret for ExactMemory keys (required prod)
-  RECALLSPECTION_ADMIN_KEY - admin key (required prod, fail closed)
-  RECALLSPECTION_SIGNUP_SECRET - optional signup gate
-  RECALLSPECTION_MEMORY_FILE - /data/memory.db
-  RECALLSPECTION_SWSTM_FILE - /data/swstm.pt
-  RECALLSPECTION_DB_FILE - /data/keys.db
-  RECALLSPECTION_EXACT_LOG - /data/transparency.log
-  RECALLSPECTION_ANCHOR_BACKEND - file | s3 | none (default file)
-  RECALLSPECTION_ANCHOR_FILE - /data/anchor.json (file backend)
-  RECALLSPECTION_ANCHOR_BUCKET - S3 bucket (s3 backend)
-  RECALLSPECTION_ANCHOR_PREFIX - S3 prefix (s3 backend, default recallspection/)
-  STRIPE_SECRET_KEY - sk_live_... (for billing)
-  STRIPE_WEBHOOK_SECRET - whsec_...
-  STRIPE_PRICE_PRO - price_... ($20/mo)
-  STRIPE_PRICE_TEAM - price_... ($99/mo)
-  FRONTEND_URL - https://your-dashboard.com for redirect after checkout
 """
 import os
 import hmac
@@ -101,10 +72,455 @@ INDEX_HTML = next(
 # --- Dashboard static dir (co-located with this file) ---
 STATIC_DIR = _THIS_FILE.parent / "static"
 
+# =====================================================================
+# Eigengrau-themed Swagger UI
+# =====================================================================
+# CSS is written without f-string braces so no escaping is needed.
+# The OpenAPI URL is injected below via .replace().
+DOCS_HTML_TEMPLATE = """<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Recallspection API - Reference</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui.css">
+<style>
+:root {
+    --bg: #16161D;
+    --bg-panel: #1E1E28;
+    --bg-code: #0F0F14;
+    --fg: #E8F4FF;
+    --fg-dim: #A0A8B4;
+    --accent: #A8D8F0;
+    --accent-dim: #6E90A8;
+    --border: #2A2A36;
+    --green: #4AE08A;
+    --yellow: #F0C84A;
+    --red: #FF5A5A;
+}
+
+html, body {
+    background: var(--bg) !important;
+    color: var(--fg);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    margin: 0;
+}
+
+/* Header */
+.swagger-ui .topbar {
+    background: var(--bg-panel);
+    border-bottom: 1px solid var(--border);
+    padding: 14px 0;
+}
+.swagger-ui .topbar .download-url-wrapper {
+    display: none;
+}
+.swagger-ui .topbar-wrapper {
+    padding: 0 32px;
+    align-items: center;
+}
+.swagger-ui .topbar-wrapper .link {
+    display: flex;
+    align-items: center;
+    text-decoration: none;
+}
+.swagger-ui .topbar-wrapper .link::before {
+    content: "Recallspection";
+    font-family: "Cinzel", serif;
+    font-weight: 700;
+    font-size: 22px;
+    letter-spacing: 0.05em;
+    background: linear-gradient(180deg, #FFFFFF 0%, #C8D8E8 35%, #8FA8C0 50%, #E8F4FF 65%, #FFFFFF 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+    margin-right: 12px;
+}
+.swagger-ui .topbar-wrapper img {
+    display: none;
+}
+
+/* Info block */
+.swagger-ui .info {
+    margin: 32px 0 24px;
+    padding: 0 32px;
+}
+.swagger-ui .info .title {
+    color: var(--accent);
+    font-family: "Cinzel", serif;
+    font-weight: 700;
+    letter-spacing: 0.03em;
+}
+.swagger-ui .info .title small {
+    background: var(--bg-panel);
+    color: var(--accent);
+}
+.swagger-ui .info .title small.version-stamp {
+    background: var(--bg-panel);
+    border: 1px solid var(--border);
+}
+.swagger-ui .info p, .swagger-ui .info li {
+    color: var(--fg-dim);
+}
+.swagger-ui .info a {
+    color: var(--accent);
+}
+.swagger-ui .info .base-url {
+    color: var(--fg-dim);
+}
+.swagger-ui .info h1, .swagger-ui .info h2, .swagger-ui .info h3, .swagger-ui .info h4 {
+    color: var(--accent);
+}
+.swagger-ui .info .markdown code {
+    background: var(--bg-code);
+    color: var(--accent);
+}
+
+/* Scheme container / servers */
+.swagger-ui .scheme-container {
+    background: var(--bg-panel);
+    border-top: 1px solid var(--border);
+    border-bottom: 1px solid var(--border);
+    box-shadow: none;
+    padding: 16px 32px;
+}
+.swagger-ui .scheme-container .schemes > label {
+    color: var(--fg-dim);
+}
+.swagger-ui select {
+    background: var(--bg-code) !important;
+    color: var(--fg) !important;
+    border: 1px solid var(--border) !important;
+    border-radius: 4px;
+}
+.swagger-ui .servers > label select {
+    background: var(--bg-code) url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20' fill='%23A8D8F0'%3E%3Cpath d='M5 7l5 5 5-5z'/%3E%3C/svg%3E") no-repeat right 8px center !important;
+    color: var(--fg) !important;
+}
+
+/* Tag headers */
+.swagger-ui .opblock-tag {
+    color: var(--accent);
+    border-bottom: 1px solid var(--border);
+    font-family: "Cinzel", serif;
+    letter-spacing: 0.03em;
+}
+.swagger-ui .opblock-tag:hover {
+    background: var(--bg-panel);
+}
+.swagger-ui .opblock-tag small {
+    color: var(--fg-dim);
+}
+.swagger-ui .opblock-tag-section h3 {
+    color: var(--accent);
+}
+
+/* Operation blocks */
+.swagger-ui .opblock {
+    background: var(--bg-panel);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    box-shadow: none;
+    margin-bottom: 8px;
+}
+.swagger-ui .opblock .opblock-summary {
+    border-bottom: 1px solid var(--border);
+}
+.swagger-ui .opblock .opblock-summary-method {
+    color: var(--bg);
+    font-weight: 700;
+    letter-spacing: 0.03em;
+    text-shadow: none;
+}
+.swagger-ui .opblock .opblock-summary-path,
+.swagger-ui .opblock .opblock-summary-path__deprecated {
+    color: var(--fg);
+}
+.swagger-ui .opblock .opblock-summary-description {
+    color: var(--fg-dim);
+}
+.swagger-ui .opblock .opblock-summary-control svg {
+    fill: var(--accent);
+}
+.swagger-ui .opblock-body {
+    background: var(--bg-code);
+}
+.swagger-ui .opblock-body pre.microlight {
+    background: var(--bg-code) !important;
+    color: var(--fg) !important;
+}
+
+/* Method colors (kept distinct but toned down) */
+.swagger-ui .opblock.opblock-get {
+    border-color: rgba(168, 216, 240, 0.3);
+    background: rgba(168, 216, 240, 0.05);
+}
+.swagger-ui .opblock.opblock-get .opblock-summary-method {
+    background: var(--accent);
+}
+.swagger-ui .opblock.opblock-post {
+    border-color: rgba(74, 224, 138, 0.3);
+    background: rgba(74, 224, 138, 0.05);
+}
+.swagger-ui .opblock.opblock-post .opblock-summary-method {
+    background: var(--green);
+}
+.swagger-ui .opblock.opblock-put {
+    border-color: rgba(240, 200, 74, 0.3);
+    background: rgba(240, 200, 74, 0.05);
+}
+.swagger-ui .opblock.opblock-put .opblock-summary-method {
+    background: var(--yellow);
+}
+.swagger-ui .opblock.opblock-delete {
+    border-color: rgba(255, 90, 90, 0.3);
+    background: rgba(255, 90, 90, 0.05);
+}
+.swagger-ui .opblock.opblock-delete .opblock-summary-method {
+    background: var(--red);
+}
+
+/* Tables and models */
+.swagger-ui table thead tr th {
+    color: var(--accent);
+    border-bottom: 1px solid var(--border);
+}
+.swagger-ui table tbody tr td {
+    color: var(--fg);
+    border-bottom: 1px solid var(--border);
+}
+.swagger-ui .model-box {
+    background: var(--bg-code);
+    color: var(--fg);
+}
+.swagger-ui .model {
+    color: var(--fg);
+}
+.swagger-ui .model-title {
+    color: var(--accent);
+}
+.swagger-ui .prop-type {
+    color: var(--accent-dim);
+}
+.swagger-ui .prop-format {
+    color: var(--fg-dim);
+}
+.swagger-ui .parameter__name {
+    color: var(--fg);
+}
+.swagger-ui .parameter__type {
+    color: var(--accent-dim);
+}
+.swagger-ui .parameter__in {
+    color: var(--fg-dim);
+}
+.swagger-ui .parameter__name.required::after {
+    color: var(--red);
+}
+.swagger-ui .parameters-col_description input,
+.swagger-ui .parameters-col_description textarea,
+.swagger-ui .parameters-col_description select {
+    background: var(--bg-code);
+    color: var(--fg);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+}
+.swagger-ui input[type=text],
+.swagger-ui input[type=password],
+.swagger-ui input[type=search],
+.swagger-ui textarea {
+    background: var(--bg-code);
+    color: var(--fg);
+    border: 1px solid var(--border);
+}
+.swagger-ui input::placeholder,
+.swagger-ui textarea::placeholder {
+    color: var(--fg-dim);
+    opacity: 0.6;
+}
+
+/* Buttons */
+.swagger-ui .btn {
+    background: transparent;
+    color: var(--accent);
+    border: 1px solid var(--accent);
+    border-radius: 4px;
+    font-weight: 500;
+    letter-spacing: 0.02em;
+}
+.swagger-ui .btn:hover {
+    background: rgba(168, 216, 240, 0.1);
+}
+.swagger-ui .btn.execute {
+    background: var(--accent);
+    color: var(--bg);
+    border-color: var(--accent);
+    font-weight: 700;
+}
+.swagger-ui .btn.execute:hover {
+    background: var(--fg);
+    border-color: var(--fg);
+}
+.swagger-ui .btn.cancel {
+    background: transparent;
+    color: var(--red);
+    border-color: var(--red);
+}
+.swagger-ui .btn.authorize {
+    background: transparent;
+    color: var(--accent);
+    border-color: var(--accent);
+}
+.swagger-ui .btn.authorize svg {
+    fill: var(--accent);
+}
+.swagger-ui .btn.authorize.locked {
+    background: transparent;
+    color: var(--accent);
+    border-color: var(--accent);
+}
+
+/* Response blocks */
+.swagger-ui .responses-inner h4,
+.swagger-ui .responses-inner h5 {
+    color: var(--accent);
+}
+.swagger-ui .response-col_status {
+    color: var(--fg);
+}
+.swagger-ui .response-col_description {
+    color: var(--fg-dim);
+}
+.swagger-ui .response-col_links {
+    color: var(--fg-dim);
+}
+.swagger-ui .highlight-code {
+    background: var(--bg-code) !important;
+}
+.swagger-ui .highlight-code .microlight {
+    background: var(--bg-code) !important;
+}
+.swagger-ui .copy-to-clipboard {
+    background: var(--bg-panel);
+    border: 1px solid var(--border);
+}
+.swagger-ui .copy-to-clipboard button {
+    background: transparent;
+    color: var(--accent);
+}
+
+/* Scrollbars */
+.swagger-ui ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+}
+.swagger-ui ::-webkit-scrollbar-track {
+    background: var(--bg-code);
+}
+.swagger-ui ::-webkit-scrollbar-thumb {
+    background: var(--border);
+    border-radius: 5px;
+}
+.swagger-ui ::-webkit-scrollbar-thumb:hover {
+    background: var(--accent-dim);
+}
+
+/* Hide the default error wrapper text so it doesn't break theme */
+.swagger-ui .errors-wrapper {
+    background: rgba(255, 90, 90, 0.08);
+    border-color: var(--red);
+}
+.swagger-ui .errors-wrapper .errors h4 {
+    color: var(--red);
+}
+.swagger-ui .errors-wrapper .errors small {
+    color: var(--fg-dim);
+}
+
+/* Dialogs / modals */
+.swagger-ui .dialog-ux .modal-ux {
+    background: var(--bg-panel);
+    border: 1px solid var(--border);
+}
+.swagger-ui .dialog-ux .modal-ux-header h3 {
+    color: var(--accent);
+    font-family: "Cinzel", serif;
+}
+.swagger-ui .dialog-ux .modal-ux-content h4 {
+    color: var(--accent);
+}
+.swagger-ui .dialog-ux .modal-ux-content p {
+    color: var(--fg-dim);
+}
+.swagger-ui .dialog-ux .modal-ux-header .close-modal svg {
+    fill: var(--fg);
+}
+.swagger-ui .auth-container .errors {
+    color: var(--red);
+}
+
+/* Inline links and marks */
+.swagger-ui a {
+    color: var(--accent);
+}
+.swagger-ui code {
+    background: var(--bg-code);
+    color: var(--accent);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    padding: 1px 5px;
+}
+.swagger-ui .renderedMarkdown p {
+    color: var(--fg-dim);
+}
+.swagger-ui .renderedMarkdown code {
+    background: var(--bg-code);
+    color: var(--accent);
+}
+</style>
+</head>
+<body>
+<div id="swagger-ui"></div>
+<script src="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui-bundle.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui-standalone-preset.js"></script>
+<script>
+window.onload = function() {
+    window.ui = SwaggerUIBundle({
+        url: "__OPENAPI_URL__",
+        dom_id: "#swagger-ui",
+        deepLinking: true,
+        docExpansion: "list",
+        defaultModelsExpandDepth: 1,
+        defaultModelExpandDepth: 1,
+        displayRequestDuration: true,
+        filter: true,
+        tryItOutEnabled: true,
+        presets: [
+            SwaggerUIBundle.presets.apis,
+            SwaggerUIStandalonePreset
+        ],
+        layout: "BaseLayout",
+        syntaxHighlight: {
+            activate: true,
+            theme: "obsidian"
+        }
+    });
+};
+</script>
+</body>
+</html>
+"""
+
+
 app = FastAPI(
     title="Recallspection API v3.2.0",
     description="Tamper-evident exact memory + collision-resistant SWSTM. TL;DR get(k)=v_set or Err(Tamper)",
-    version="3.2.0"
+    version="3.2.0",
+    docs_url=None,       # replaced by custom route below
+    redoc_url=None,      # disable default ReDoc
 )
 
 app.add_middleware(
@@ -160,19 +576,6 @@ def const_eq(a: str, b: str) -> bool:
 
 # --- Anchor backends ---
 class FileAnchor:
-    """Durable file-based anchor. Monotonic high-water mark.
-
-    Writes a JSON file with max_version, chain_hash, container_hash,
-    anchored_at. Never lowers the mark. ExactMemory.load() reads this
-    and raises RollbackError if the log tip is below the mark.
-
-    Threat model honestly: an attacker who can write every file on the
-    same disk can roll back anchor.json too. This upgrades T9 from
-    "trivially accepted" (no anchor) to "attacker must also modify a
-    second file at a different path". For full off-store separation,
-    put anchor.json on a different volume, or use the s3 backend with
-    Object Lock, or a remote HTTP anchor service.
-    """
     def __init__(self, path):
         self.path = Path(path)
         self._lock = threading.Lock()
@@ -264,21 +667,19 @@ try:
         try:
             exact_memory.load(MEMORY_FILE)
         except FormatVersionError as e:
-            print(f"[FATAL] Format version mismatch: {e}")
-            print("[FATAL] Refusing to start with incompatible store. Re-ingest data or downgrade.")
+            print("[FATAL] Format version mismatch: " + str(e))
             raise SystemExit(2)
         except (TamperError, RollbackError, LogCompromisedError) as e:
-            print(f"[FATAL] Integrity failure on load: {e}")
-            print("[FATAL] Refusing to serve from a compromised or rolled-back store.")
+            print("[FATAL] Integrity failure on load: " + str(e))
             raise SystemExit(3)
         except Exception as e:
-            print(f"[FATAL] Unexpected load failure: {e}")
+            print("[FATAL] Unexpected load failure: " + str(e))
             raise SystemExit(4)
     print("[ExactMemory] initialized")
 except SystemExit:
     raise
 except Exception as e:
-    print(f"[ExactMemory] init failed: {e} - running in mock mode")
+    print("[ExactMemory] init failed: " + str(e) + " - running in mock mode")
     exact_memory = None
 
 # --- SWSTM Hybrid ---
@@ -290,10 +691,10 @@ try:
         try:
             hybrid.load(SWSTM_FILE)
         except Exception as e:
-            print(f"[SWSTM] load failed: {e}")
+            print("[SWSTM] load failed: " + str(e))
     print("[SWSTM] initialized")
 except Exception as e:
-    print(f"[SWSTM] init failed: {e}")
+    print("[SWSTM] init failed: " + str(e))
 
 # --- Auto-save ---
 def autosave_loop():
@@ -305,7 +706,7 @@ def autosave_loop():
             if hybrid:
                 hybrid.save(SWSTM_FILE)
         except Exception as e:
-            print(f"[autosave] {e}")
+            print("[autosave] " + str(e))
 
 threading.Thread(target=autosave_loop, daemon=True).start()
 
@@ -349,7 +750,6 @@ def verify_admin(x_admin_key: str = Header(None)):
 
 # --- Anchor helpers ---
 def _anchor_snapshot():
-    """Normalize anchor state to a dict. Handles dict and dataclass returns."""
     if _anchor is None:
         return None
     try:
@@ -367,7 +767,17 @@ def _anchor_snapshot():
         "container_hash": getattr(latest, "container_hash", None),
     }
 
-# --- Endpoints ---
+# =====================================================================
+# Custom themed docs
+# =====================================================================
+@app.get("/docs", include_in_schema=False)
+def custom_docs():
+    html = DOCS_HTML_TEMPLATE.replace("__OPENAPI_URL__", app.openapi_url or "/openapi.json")
+    return HTMLResponse(content=html)
+
+# =====================================================================
+# Endpoints
+# =====================================================================
 @app.get("/health")
 def health():
     anchor_state = _anchor_snapshot()
@@ -396,7 +806,7 @@ def signup(req: SignupRequest):
         if not req.signup_secret or not const_eq(req.signup_secret, SIGNUP_SECRET):
             raise HTTPException(403, "Invalid signup secret")
     import secrets
-    raw_key = f"rsc_{secrets.token_urlsafe(32)}"
+    raw_key = "rsc_" + secrets.token_urlsafe(32)
     key_hash = hash_key(raw_key)
     prefix = raw_key[:12]
     quota = {"free": 1000, "pro": 50000, "team": 500000, "enterprise": 10_000_000}[req.tier]
@@ -419,7 +829,7 @@ def signup(req: SignupRequest):
             conn.commit()
             conn.close()
         except Exception as e:
-            print(f"[stripe] customer create failed: {e}")
+            print("[stripe] customer create failed: " + str(e))
 
     return {
         "api_key": raw_key,
@@ -443,7 +853,7 @@ def usage(auth=Depends(verify_api_key)):
 
 def check_quota(auth):
     if auth["quota_used"] >= auth["quota_limit"]:
-        raise HTTPException(429, f"Quota exceeded {auth['quota_used']}/{auth['quota_limit']} - upgrade at /billing/checkout")
+        raise HTTPException(429, "Quota exceeded " + str(auth["quota_used"]) + "/" + str(auth["quota_limit"]))
     conn = get_conn()
     conn.execute("UPDATE api_keys SET quota_used=quota_used+1 WHERE key_id=?", (auth["key_id"],))
     conn.commit()
@@ -472,14 +882,17 @@ def add_fact(req: AddRequest, auth=Depends(verify_api_key)):
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(500, f"Add failed: {str(e)[:500]}")
+        raise HTTPException(500, "Add failed: " + str(e)[:500])
 
 @app.get("/get")
 def get_fact(key: str, top_k: int = 1, auth=Depends(verify_api_key)):
     check_quota(auth)
     try:
         if exact_memory:
-            val, status = exact_memory.get_with_status(key) if hasattr(exact_memory, "get_with_status") else (exact_memory.get(key), "ok")
+            if hasattr(exact_memory, "get_with_status"):
+                val, status = exact_memory.get_with_status(key)
+            else:
+                val, status = exact_memory.get(key), "ok"
 
             if status == "ok" and val is not None:
                 return {"key": key, "value": val, "source": "exact", "status": status, "tamper": False}
@@ -508,7 +921,7 @@ def get_fact(key: str, top_k: int = 1, auth=Depends(verify_api_key)):
 
         return {"key": key, "value": None, "source": "none", "status": "missing"}
     except Exception as e:
-        print(f"[get] error {e}")
+        print("[get] error " + str(e))
         raise HTTPException(500, "Internal retrieval error")
 
 @app.post("/exact/add")
@@ -522,7 +935,10 @@ def exact_get(key: str, auth=Depends(verify_api_key)):
     if not exact_memory:
         raise HTTPException(500, "ExactMemory not loaded")
     try:
-        val, status = exact_memory.get_with_status(key) if hasattr(exact_memory, "get_with_status") else (exact_memory.get(key), "ok")
+        if hasattr(exact_memory, "get_with_status"):
+            val, status = exact_memory.get_with_status(key)
+        else:
+            val, status = exact_memory.get(key), "ok"
         return {
             "key": key,
             "value": val,
@@ -533,7 +949,7 @@ def exact_get(key: str, auth=Depends(verify_api_key)):
     except Exception as e:
         raise HTTPException(500, str(e)[:500])
 
-# --- Billing: pays Sciencedelic Metatech ---
+# --- Billing ---
 @app.post("/billing/checkout")
 def billing_checkout(req: CheckoutRequest):
     if not (STRIPE_AVAILABLE and STRIPE_SECRET):
@@ -550,15 +966,22 @@ def billing_checkout(req: CheckoutRequest):
     try:
         session = stripe.checkout.Session.create(
             customer_email=req.email,
-            line_items=[{"price": price_id, "quantity": 1}] if price_id else [{"price_data": {"currency": "usd", "product_data": {"name": f"Recallspection {req.tier.title()}"}, "unit_amount": {"pro":2000,"team":9900,"enterprise":24900}[req.tier]}, "quantity": 1}],
+            line_items=[{"price": price_id, "quantity": 1}] if price_id else [{
+                "price_data": {
+                    "currency": "usd",
+                    "product_data": {"name": "Recallspection " + req.tier.title()},
+                    "unit_amount": {"pro": 2000, "team": 9900, "enterprise": 24900}[req.tier],
+                },
+                "quantity": 1
+            }],
             mode="subscription",
-            success_url=f"{FRONTEND_URL}/billing/success?session_id={{CHECKOUT_SESSION_ID}}",
-            cancel_url=f"{FRONTEND_URL}/billing/cancel",
+            success_url=FRONTEND_URL + "/billing/success?session_id={CHECKOUT_SESSION_ID}",
+            cancel_url=FRONTEND_URL + "/billing/cancel",
             metadata={"tier": req.tier, "email": req.email}
         )
         return {"checkout_url": session.url, "session_id": session.id}
     except Exception as e:
-        raise HTTPException(500, f"Stripe checkout failed: {e}")
+        raise HTTPException(500, "Stripe checkout failed: " + str(e))
 
 @app.get("/billing/portal")
 def billing_portal(customer_id: str = None, auth=Depends(verify_api_key)):
@@ -568,10 +991,10 @@ def billing_portal(customer_id: str = None, auth=Depends(verify_api_key)):
     if not cid:
         raise HTTPException(400, "No stripe_customer_id found - signup with email first")
     try:
-        portal = stripe.billing_portal.Session.create(customer=cid, return_url=f"{FRONTEND_URL}/usage")
+        portal = stripe.billing_portal.Session.create(customer=cid, return_url=FRONTEND_URL + "/usage")
         return {"portal_url": portal.url}
     except Exception as e:
-        raise HTTPException(500, f"Portal failed: {e}")
+        raise HTTPException(500, "Portal failed: " + str(e))
 
 @app.post("/stripe/webhook")
 async def stripe_webhook(request: Request):
@@ -582,7 +1005,7 @@ async def stripe_webhook(request: Request):
     try:
         event = stripe.Webhook.construct_event(payload, sig, STRIPE_WEBHOOK_SECRET)
     except Exception as e:
-        raise HTTPException(400, f"Webhook error: {e}")
+        raise HTTPException(400, "Webhook error: " + str(e))
 
     if event["type"] in ("checkout.session.completed", "customer.subscription.created", "customer.subscription.updated"):
         obj = event["data"]["object"]
@@ -591,13 +1014,15 @@ async def stripe_webhook(request: Request):
         try:
             conn = get_conn()
             if customer_id:
-                conn.execute("UPDATE api_keys SET tier=?, status='active', quota_limit=? WHERE stripe_customer_id=?",
-                             (tier, {"pro":50000,"team":500000,"enterprise":10000000}[tier], customer_id))
+                conn.execute(
+                    "UPDATE api_keys SET tier=?, status='active', quota_limit=? WHERE stripe_customer_id=?",
+                    (tier, {"pro": 50000, "team": 500000, "enterprise": 10000000}[tier], customer_id)
+                )
             conn.commit()
             conn.close()
-            print(f"[stripe] upgraded {customer_id} to {tier}")
+            print("[stripe] upgraded " + str(customer_id) + " to " + tier)
         except Exception as e:
-            print(f"[stripe] DB update failed {e}")
+            print("[stripe] DB update failed " + str(e))
 
     return {"status": "ok"}
 
@@ -605,7 +1030,10 @@ async def stripe_webhook(request: Request):
 @app.get("/admin/keys")
 def admin_list_keys(_=Depends(verify_admin)):
     conn = get_conn()
-    rows = conn.execute("SELECT key_id, api_key_prefix, created_at, quota_limit, quota_used, tier, status, stripe_customer_id FROM api_keys ORDER BY created_at DESC LIMIT 100").fetchall()
+    rows = conn.execute(
+        "SELECT key_id, api_key_prefix, created_at, quota_limit, quota_used, tier, status, stripe_customer_id "
+        "FROM api_keys ORDER BY created_at DESC LIMIT 100"
+    ).fetchall()
     conn.close()
     return {"keys": [dict(r) for r in rows]}
 
@@ -644,14 +1072,14 @@ def admin_anchor(_=Depends(verify_admin)):
         try:
             exact_memory.save(MEMORY_FILE)
         except Exception as e:
-            raise HTTPException(500, f"save failed: {e}")
+            raise HTTPException(500, "save failed: " + str(e))
     return {
         "backend": ANCHOR_BACKEND,
         "file": ANCHOR_FILE if ANCHOR_BACKEND == "file" else None,
         "state": _anchor_snapshot(),
     }
 
-# --- Root: serve the landing page ---
+# --- Root: landing page ---
 @app.get("/", response_class=HTMLResponse)
 def root():
     if INDEX_HTML.exists():
@@ -664,13 +1092,13 @@ def root():
             "docs": "/docs",
             "health": "/health",
             "dashboard": FRONTEND_URL,
-            "message": "index.html not found - serving JSON fallback. Check deploy includes it.",
+            "message": "index.html not found - serving JSON fallback.",
             "expected_path": str(INDEX_HTML),
         },
     )
 
 # =====================================================================
-# --- Customer-facing dashboard ---
+# Customer-facing dashboard
 # =====================================================================
 _STATUS_TO_BADGE: Dict[str, str] = {
     "ok": "green",
@@ -790,7 +1218,7 @@ def dashboard_export(auth=Depends(verify_api_key)):
     try:
         from recallspection.anchor import audit_export
     except ImportError as e:
-        raise HTTPException(500, f"Export unavailable: {e}")
+        raise HTTPException(500, "Export unavailable: " + str(e))
     fd, tmp = tempfile.mkstemp(suffix=".zip")
     os.close(fd)
     try:
@@ -798,7 +1226,7 @@ def dashboard_export(auth=Depends(verify_api_key)):
     except Exception as e:
         if os.path.exists(tmp):
             os.unlink(tmp)
-        raise HTTPException(500, f"Export failed: {str(e)[:300]}")
+        raise HTTPException(500, "Export failed: " + str(e)[:300])
     return FileResponse(
         tmp,
         media_type="application/zip",
