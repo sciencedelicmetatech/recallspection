@@ -4,7 +4,8 @@ Recallspection v3.2.0 Production API
 - SQLite key management + usage quotas
 - Stripe billing (checkout, portal, webhook) -> pays Sciencedelic Metatech
 - One-click deploy ready (Render/Railway/Fly)
-- Fail-closed admin, constant-time compare, payload limits, atomic saves
+- Fail-closed admin, fail-closed exact secret, constant-time compare,
+  payload limits, atomic saves
 - Customer dashboard at /dashboard (Memory, Timeline, Shadow, Export)
 - Eigengrau-themed API docs at /docs
 - External anchor: file backend by default, gates T9 rollback on load
@@ -35,7 +36,17 @@ except ImportError:
     STRIPE_AVAILABLE = False
 
 # --- Config ---
-EXACT_SECRET = os.getenv("RECALLSPECTION_EXACT_SECRET", "dev-secret-change-me")
+EXACT_SECRET = os.getenv("RECALLSPECTION_EXACT_SECRET", "")
+if not EXACT_SECRET:
+    if os.getenv("RECALLSPECTION_ALLOW_DEV_SECRET") == "1":
+        EXACT_SECRET = "dev-secret-change-me"
+        print("[WARN] using dev secret - RECALLSPECTION_ALLOW_DEV_SECRET=1")
+    else:
+        raise SystemExit(
+            "FATAL: RECALLSPECTION_EXACT_SECRET not set. "
+            "Set it in production. For local dev, set RECALLSPECTION_ALLOW_DEV_SECRET=1."
+        )
+
 ADMIN_KEY = os.getenv("RECALLSPECTION_ADMIN_KEY", "")
 SIGNUP_SECRET = os.getenv("RECALLSPECTION_SIGNUP_SECRET", "")
 MEMORY_FILE = os.getenv("RECALLSPECTION_MEMORY_FILE", "./memory.db")
@@ -51,9 +62,9 @@ ANCHOR_PREFIX = os.getenv("RECALLSPECTION_ANCHOR_PREFIX", "recallspection/")
 
 STRIPE_SECRET = os.getenv("STRIPE_SECRET_KEY", "")
 STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", "")
-STRIPE_PRICE_PRO = os.getenv("STRIPE_PRICE_PRO", "price_pro_20")
-STRIPE_PRICE_TEAM = os.getenv("STRIPE_PRICE_TEAM", "price_team_99")
-STRIPE_PRICE_ENTERPRISE = os.getenv("STRIPE_PRICE_ENTERPRISE", "price_ent_249")
+STRIPE_PRICE_PRO = os.getenv("STRIPE_PRICE_PRO", "")
+STRIPE_PRICE_TEAM = os.getenv("STRIPE_PRICE_TEAM", "")
+STRIPE_PRICE_ENTERPRISE = os.getenv("STRIPE_PRICE_ENTERPRISE", "")
 
 if STRIPE_AVAILABLE and STRIPE_SECRET:
     stripe.api_key = STRIPE_SECRET
@@ -75,8 +86,6 @@ STATIC_DIR = _THIS_FILE.parent / "static"
 # =====================================================================
 # Eigengrau-themed Swagger UI
 # =====================================================================
-# CSS is written without f-string braces so no escaping is needed.
-# The OpenAPI URL is injected below via .replace().
 DOCS_HTML_TEMPLATE = """<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -101,32 +110,16 @@ DOCS_HTML_TEMPLATE = """<!DOCTYPE html>
     --yellow: #F0C84A;
     --red: #FF5A5A;
 }
-
 html, body {
     background: var(--bg) !important;
     color: var(--fg);
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
     margin: 0;
 }
-
-/* Header */
-.swagger-ui .topbar {
-    background: var(--bg-panel);
-    border-bottom: 1px solid var(--border);
-    padding: 14px 0;
-}
-.swagger-ui .topbar .download-url-wrapper {
-    display: none;
-}
-.swagger-ui .topbar-wrapper {
-    padding: 0 32px;
-    align-items: center;
-}
-.swagger-ui .topbar-wrapper .link {
-    display: flex;
-    align-items: center;
-    text-decoration: none;
-}
+.swagger-ui .topbar { background: var(--bg-panel); border-bottom: 1px solid var(--border); padding: 14px 0; }
+.swagger-ui .topbar .download-url-wrapper { display: none; }
+.swagger-ui .topbar-wrapper { padding: 0 32px; align-items: center; }
+.swagger-ui .topbar-wrapper .link { display: flex; align-items: center; text-decoration: none; }
 .swagger-ui .topbar-wrapper .link::before {
     content: "Recallspection";
     font-family: "Cinzel", serif;
@@ -139,347 +132,88 @@ html, body {
     -webkit-text-fill-color: transparent;
     margin-right: 12px;
 }
-.swagger-ui .topbar-wrapper img {
-    display: none;
-}
-
-/* Info block */
-.swagger-ui .info {
-    margin: 32px 0 24px;
-    padding: 0 32px;
-}
-.swagger-ui .info .title {
-    color: var(--accent);
-    font-family: "Cinzel", serif;
-    font-weight: 700;
-    letter-spacing: 0.03em;
-}
-.swagger-ui .info .title small {
-    background: var(--bg-panel);
-    color: var(--accent);
-}
-.swagger-ui .info .title small.version-stamp {
-    background: var(--bg-panel);
-    border: 1px solid var(--border);
-}
-.swagger-ui .info p, .swagger-ui .info li {
-    color: var(--fg-dim);
-}
-.swagger-ui .info a {
-    color: var(--accent);
-}
-.swagger-ui .info .base-url {
-    color: var(--fg-dim);
-}
-.swagger-ui .info h1, .swagger-ui .info h2, .swagger-ui .info h3, .swagger-ui .info h4 {
-    color: var(--accent);
-}
-.swagger-ui .info .markdown code {
-    background: var(--bg-code);
-    color: var(--accent);
-}
-
-/* Scheme container / servers */
-.swagger-ui .scheme-container {
-    background: var(--bg-panel);
-    border-top: 1px solid var(--border);
-    border-bottom: 1px solid var(--border);
-    box-shadow: none;
-    padding: 16px 32px;
-}
-.swagger-ui .scheme-container .schemes > label {
-    color: var(--fg-dim);
-}
-.swagger-ui select {
-    background: var(--bg-code) !important;
-    color: var(--fg) !important;
-    border: 1px solid var(--border) !important;
-    border-radius: 4px;
-}
-.swagger-ui .servers > label select {
-    background: var(--bg-code) url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20' fill='%23A8D8F0'%3E%3Cpath d='M5 7l5 5 5-5z'/%3E%3C/svg%3E") no-repeat right 8px center !important;
-    color: var(--fg) !important;
-}
-
-/* Tag headers */
-.swagger-ui .opblock-tag {
-    color: var(--accent);
-    border-bottom: 1px solid var(--border);
-    font-family: "Cinzel", serif;
-    letter-spacing: 0.03em;
-}
-.swagger-ui .opblock-tag:hover {
-    background: var(--bg-panel);
-}
-.swagger-ui .opblock-tag small {
-    color: var(--fg-dim);
-}
-.swagger-ui .opblock-tag-section h3 {
-    color: var(--accent);
-}
-
-/* Operation blocks */
-.swagger-ui .opblock {
-    background: var(--bg-panel);
-    border: 1px solid var(--border);
-    border-radius: 4px;
-    box-shadow: none;
-    margin-bottom: 8px;
-}
-.swagger-ui .opblock .opblock-summary {
-    border-bottom: 1px solid var(--border);
-}
-.swagger-ui .opblock .opblock-summary-method {
-    color: var(--bg);
-    font-weight: 700;
-    letter-spacing: 0.03em;
-    text-shadow: none;
-}
-.swagger-ui .opblock .opblock-summary-path,
-.swagger-ui .opblock .opblock-summary-path__deprecated {
-    color: var(--fg);
-}
-.swagger-ui .opblock .opblock-summary-description {
-    color: var(--fg-dim);
-}
-.swagger-ui .opblock .opblock-summary-control svg {
-    fill: var(--accent);
-}
-.swagger-ui .opblock-body {
-    background: var(--bg-code);
-}
-.swagger-ui .opblock-body pre.microlight {
-    background: var(--bg-code) !important;
-    color: var(--fg) !important;
-}
-
-/* Method colors (kept distinct but toned down) */
-.swagger-ui .opblock.opblock-get {
-    border-color: rgba(168, 216, 240, 0.3);
-    background: rgba(168, 216, 240, 0.05);
-}
-.swagger-ui .opblock.opblock-get .opblock-summary-method {
-    background: var(--accent);
-}
-.swagger-ui .opblock.opblock-post {
-    border-color: rgba(74, 224, 138, 0.3);
-    background: rgba(74, 224, 138, 0.05);
-}
-.swagger-ui .opblock.opblock-post .opblock-summary-method {
-    background: var(--green);
-}
-.swagger-ui .opblock.opblock-put {
-    border-color: rgba(240, 200, 74, 0.3);
-    background: rgba(240, 200, 74, 0.05);
-}
-.swagger-ui .opblock.opblock-put .opblock-summary-method {
-    background: var(--yellow);
-}
-.swagger-ui .opblock.opblock-delete {
-    border-color: rgba(255, 90, 90, 0.3);
-    background: rgba(255, 90, 90, 0.05);
-}
-.swagger-ui .opblock.opblock-delete .opblock-summary-method {
-    background: var(--red);
-}
-
-/* Tables and models */
-.swagger-ui table thead tr th {
-    color: var(--accent);
-    border-bottom: 1px solid var(--border);
-}
-.swagger-ui table tbody tr td {
-    color: var(--fg);
-    border-bottom: 1px solid var(--border);
-}
-.swagger-ui .model-box {
-    background: var(--bg-code);
-    color: var(--fg);
-}
-.swagger-ui .model {
-    color: var(--fg);
-}
-.swagger-ui .model-title {
-    color: var(--accent);
-}
-.swagger-ui .prop-type {
-    color: var(--accent-dim);
-}
-.swagger-ui .prop-format {
-    color: var(--fg-dim);
-}
-.swagger-ui .parameter__name {
-    color: var(--fg);
-}
-.swagger-ui .parameter__type {
-    color: var(--accent-dim);
-}
-.swagger-ui .parameter__in {
-    color: var(--fg-dim);
-}
-.swagger-ui .parameter__name.required::after {
-    color: var(--red);
-}
+.swagger-ui .topbar-wrapper img { display: none; }
+.swagger-ui .info { margin: 32px 0 24px; padding: 0 32px; }
+.swagger-ui .info .title { color: var(--accent); font-family: "Cinzel", serif; font-weight: 700; letter-spacing: 0.03em; }
+.swagger-ui .info .title small { background: var(--bg-panel); color: var(--accent); }
+.swagger-ui .info .title small.version-stamp { background: var(--bg-panel); border: 1px solid var(--border); }
+.swagger-ui .info p, .swagger-ui .info li { color: var(--fg-dim); }
+.swagger-ui .info a { color: var(--accent); }
+.swagger-ui .info .base-url { color: var(--fg-dim); }
+.swagger-ui .info h1, .swagger-ui .info h2, .swagger-ui .info h3, .swagger-ui .info h4 { color: var(--accent); }
+.swagger-ui .info .markdown code { background: var(--bg-code); color: var(--accent); }
+.swagger-ui .scheme-container { background: var(--bg-panel); border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); box-shadow: none; padding: 16px 32px; }
+.swagger-ui .scheme-container .schemes > label { color: var(--fg-dim); }
+.swagger-ui select { background: var(--bg-code) !important; color: var(--fg) !important; border: 1px solid var(--border) !important; border-radius: 4px; }
+.swagger-ui .opblock-tag { color: var(--accent); border-bottom: 1px solid var(--border); font-family: "Cinzel", serif; letter-spacing: 0.03em; }
+.swagger-ui .opblock-tag:hover { background: var(--bg-panel); }
+.swagger-ui .opblock-tag small { color: var(--fg-dim); }
+.swagger-ui .opblock-tag-section h3 { color: var(--accent); }
+.swagger-ui .opblock { background: var(--bg-panel); border: 1px solid var(--border); border-radius: 4px; box-shadow: none; margin-bottom: 8px; }
+.swagger-ui .opblock .opblock-summary { border-bottom: 1px solid var(--border); }
+.swagger-ui .opblock .opblock-summary-method { color: var(--bg); font-weight: 700; letter-spacing: 0.03em; text-shadow: none; }
+.swagger-ui .opblock .opblock-summary-path, .swagger-ui .opblock .opblock-summary-path__deprecated { color: var(--fg); }
+.swagger-ui .opblock .opblock-summary-description { color: var(--fg-dim); }
+.swagger-ui .opblock .opblock-summary-control svg { fill: var(--accent); }
+.swagger-ui .opblock-body { background: var(--bg-code); }
+.swagger-ui .opblock-body pre.microlight { background: var(--bg-code) !important; color: var(--fg) !important; }
+.swagger-ui .opblock.opblock-get { border-color: rgba(168, 216, 240, 0.3); background: rgba(168, 216, 240, 0.05); }
+.swagger-ui .opblock.opblock-get .opblock-summary-method { background: var(--accent); }
+.swagger-ui .opblock.opblock-post { border-color: rgba(74, 224, 138, 0.3); background: rgba(74, 224, 138, 0.05); }
+.swagger-ui .opblock.opblock-post .opblock-summary-method { background: var(--green); }
+.swagger-ui .opblock.opblock-put { border-color: rgba(240, 200, 74, 0.3); background: rgba(240, 200, 74, 0.05); }
+.swagger-ui .opblock.opblock-put .opblock-summary-method { background: var(--yellow); }
+.swagger-ui .opblock.opblock-delete { border-color: rgba(255, 90, 90, 0.3); background: rgba(255, 90, 90, 0.05); }
+.swagger-ui .opblock.opblock-delete .opblock-summary-method { background: var(--red); }
+.swagger-ui table thead tr th { color: var(--accent); border-bottom: 1px solid var(--border); }
+.swagger-ui table tbody tr td { color: var(--fg); border-bottom: 1px solid var(--border); }
+.swagger-ui .model-box { background: var(--bg-code); color: var(--fg); }
+.swagger-ui .model { color: var(--fg); }
+.swagger-ui .model-title { color: var(--accent); }
+.swagger-ui .prop-type { color: var(--accent-dim); }
+.swagger-ui .prop-format { color: var(--fg-dim); }
+.swagger-ui .parameter__name { color: var(--fg); }
+.swagger-ui .parameter__type { color: var(--accent-dim); }
+.swagger-ui .parameter__in { color: var(--fg-dim); }
+.swagger-ui .parameter__name.required::after { color: var(--red); }
 .swagger-ui .parameters-col_description input,
 .swagger-ui .parameters-col_description textarea,
-.swagger-ui .parameters-col_description select {
-    background: var(--bg-code);
-    color: var(--fg);
-    border: 1px solid var(--border);
-    border-radius: 4px;
-}
-.swagger-ui input[type=text],
-.swagger-ui input[type=password],
-.swagger-ui input[type=search],
-.swagger-ui textarea {
-    background: var(--bg-code);
-    color: var(--fg);
-    border: 1px solid var(--border);
-}
-.swagger-ui input::placeholder,
-.swagger-ui textarea::placeholder {
-    color: var(--fg-dim);
-    opacity: 0.6;
-}
-
-/* Buttons */
-.swagger-ui .btn {
-    background: transparent;
-    color: var(--accent);
-    border: 1px solid var(--accent);
-    border-radius: 4px;
-    font-weight: 500;
-    letter-spacing: 0.02em;
-}
-.swagger-ui .btn:hover {
-    background: rgba(168, 216, 240, 0.1);
-}
-.swagger-ui .btn.execute {
-    background: var(--accent);
-    color: var(--bg);
-    border-color: var(--accent);
-    font-weight: 700;
-}
-.swagger-ui .btn.execute:hover {
-    background: var(--fg);
-    border-color: var(--fg);
-}
-.swagger-ui .btn.cancel {
-    background: transparent;
-    color: var(--red);
-    border-color: var(--red);
-}
-.swagger-ui .btn.authorize {
-    background: transparent;
-    color: var(--accent);
-    border-color: var(--accent);
-}
-.swagger-ui .btn.authorize svg {
-    fill: var(--accent);
-}
-.swagger-ui .btn.authorize.locked {
-    background: transparent;
-    color: var(--accent);
-    border-color: var(--accent);
-}
-
-/* Response blocks */
-.swagger-ui .responses-inner h4,
-.swagger-ui .responses-inner h5 {
-    color: var(--accent);
-}
-.swagger-ui .response-col_status {
-    color: var(--fg);
-}
-.swagger-ui .response-col_description {
-    color: var(--fg-dim);
-}
-.swagger-ui .response-col_links {
-    color: var(--fg-dim);
-}
-.swagger-ui .highlight-code {
-    background: var(--bg-code) !important;
-}
-.swagger-ui .highlight-code .microlight {
-    background: var(--bg-code) !important;
-}
-.swagger-ui .copy-to-clipboard {
-    background: var(--bg-panel);
-    border: 1px solid var(--border);
-}
-.swagger-ui .copy-to-clipboard button {
-    background: transparent;
-    color: var(--accent);
-}
-
-/* Scrollbars */
-.swagger-ui ::-webkit-scrollbar {
-    width: 10px;
-    height: 10px;
-}
-.swagger-ui ::-webkit-scrollbar-track {
-    background: var(--bg-code);
-}
-.swagger-ui ::-webkit-scrollbar-thumb {
-    background: var(--border);
-    border-radius: 5px;
-}
-.swagger-ui ::-webkit-scrollbar-thumb:hover {
-    background: var(--accent-dim);
-}
-
-/* Hide the default error wrapper text so it doesn't break theme */
-.swagger-ui .errors-wrapper {
-    background: rgba(255, 90, 90, 0.08);
-    border-color: var(--red);
-}
-.swagger-ui .errors-wrapper .errors h4 {
-    color: var(--red);
-}
-.swagger-ui .errors-wrapper .errors small {
-    color: var(--fg-dim);
-}
-
-/* Dialogs / modals */
-.swagger-ui .dialog-ux .modal-ux {
-    background: var(--bg-panel);
-    border: 1px solid var(--border);
-}
-.swagger-ui .dialog-ux .modal-ux-header h3 {
-    color: var(--accent);
-    font-family: "Cinzel", serif;
-}
-.swagger-ui .dialog-ux .modal-ux-content h4 {
-    color: var(--accent);
-}
-.swagger-ui .dialog-ux .modal-ux-content p {
-    color: var(--fg-dim);
-}
-.swagger-ui .dialog-ux .modal-ux-header .close-modal svg {
-    fill: var(--fg);
-}
-.swagger-ui .auth-container .errors {
-    color: var(--red);
-}
-
-/* Inline links and marks */
-.swagger-ui a {
-    color: var(--accent);
-}
-.swagger-ui code {
-    background: var(--bg-code);
-    color: var(--accent);
-    border: 1px solid var(--border);
-    border-radius: 3px;
-    padding: 1px 5px;
-}
-.swagger-ui .renderedMarkdown p {
-    color: var(--fg-dim);
-}
-.swagger-ui .renderedMarkdown code {
-    background: var(--bg-code);
-    color: var(--accent);
-}
+.swagger-ui .parameters-col_description select { background: var(--bg-code); color: var(--fg); border: 1px solid var(--border); border-radius: 4px; }
+.swagger-ui input[type=text], .swagger-ui input[type=password], .swagger-ui input[type=search], .swagger-ui textarea { background: var(--bg-code); color: var(--fg); border: 1px solid var(--border); }
+.swagger-ui input::placeholder, .swagger-ui textarea::placeholder { color: var(--fg-dim); opacity: 0.6; }
+.swagger-ui .btn { background: transparent; color: var(--accent); border: 1px solid var(--accent); border-radius: 4px; font-weight: 500; letter-spacing: 0.02em; }
+.swagger-ui .btn:hover { background: rgba(168, 216, 240, 0.1); }
+.swagger-ui .btn.execute { background: var(--accent); color: var(--bg); border-color: var(--accent); font-weight: 700; }
+.swagger-ui .btn.execute:hover { background: var(--fg); border-color: var(--fg); }
+.swagger-ui .btn.cancel { background: transparent; color: var(--red); border-color: var(--red); }
+.swagger-ui .btn.authorize { background: transparent; color: var(--accent); border-color: var(--accent); }
+.swagger-ui .btn.authorize svg { fill: var(--accent); }
+.swagger-ui .btn.authorize.locked { background: transparent; color: var(--accent); border-color: var(--accent); }
+.swagger-ui .responses-inner h4, .swagger-ui .responses-inner h5 { color: var(--accent); }
+.swagger-ui .response-col_status { color: var(--fg); }
+.swagger-ui .response-col_description { color: var(--fg-dim); }
+.swagger-ui .response-col_links { color: var(--fg-dim); }
+.swagger-ui .highlight-code { background: var(--bg-code) !important; }
+.swagger-ui .highlight-code .microlight { background: var(--bg-code) !important; }
+.swagger-ui .copy-to-clipboard { background: var(--bg-panel); border: 1px solid var(--border); }
+.swagger-ui .copy-to-clipboard button { background: transparent; color: var(--accent); }
+.swagger-ui ::-webkit-scrollbar { width: 10px; height: 10px; }
+.swagger-ui ::-webkit-scrollbar-track { background: var(--bg-code); }
+.swagger-ui ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 5px; }
+.swagger-ui ::-webkit-scrollbar-thumb:hover { background: var(--accent-dim); }
+.swagger-ui .errors-wrapper { background: rgba(255, 90, 90, 0.08); border-color: var(--red); }
+.swagger-ui .errors-wrapper .errors h4 { color: var(--red); }
+.swagger-ui .errors-wrapper .errors small { color: var(--fg-dim); }
+.swagger-ui .dialog-ux .modal-ux { background: var(--bg-panel); border: 1px solid var(--border); }
+.swagger-ui .dialog-ux .modal-ux-header h3 { color: var(--accent); font-family: "Cinzel", serif; }
+.swagger-ui .dialog-ux .modal-ux-content h4 { color: var(--accent); }
+.swagger-ui .dialog-ux .modal-ux-content p { color: var(--fg-dim); }
+.swagger-ui .dialog-ux .modal-ux-header .close-modal svg { fill: var(--fg); }
+.swagger-ui .auth-container .errors { color: var(--red); }
+.swagger-ui a { color: var(--accent); }
+.swagger-ui code { background: var(--bg-code); color: var(--accent); border: 1px solid var(--border); border-radius: 3px; padding: 1px 5px; }
+.swagger-ui .renderedMarkdown p { color: var(--fg-dim); }
+.swagger-ui .renderedMarkdown code { background: var(--bg-code); color: var(--accent); }
 </style>
 </head>
 <body>
@@ -498,15 +232,9 @@ window.onload = function() {
         displayRequestDuration: true,
         filter: true,
         tryItOutEnabled: true,
-        presets: [
-            SwaggerUIBundle.presets.apis,
-            SwaggerUIStandalonePreset
-        ],
+        presets: [SwaggerUIBundle.presets.apis, SwaggerUIStandalonePreset],
         layout: "BaseLayout",
-        syntaxHighlight: {
-            activate: true,
-            theme: "obsidian"
-        }
+        syntaxHighlight: { activate: true, theme: "obsidian" }
     });
 };
 </script>
@@ -519,14 +247,14 @@ app = FastAPI(
     title="Recallspection API v3.2.0",
     description="Tamper-evident exact memory + collision-resistant SWSTM. TL;DR get(k)=v_set or Err(Tamper)",
     version="3.2.0",
-    docs_url=None,       # replaced by custom route below
-    redoc_url=None,      # disable default ReDoc
+    docs_url=None,
+    redoc_url=None,
 )
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=True,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -896,7 +624,6 @@ def get_fact(key: str, top_k: int = 1, auth=Depends(verify_api_key)):
 
             if status == "ok" and val is not None:
                 return {"key": key, "value": val, "source": "exact", "status": status, "tamper": False}
-
             if status == "tampered":
                 return {"key": key, "value": None, "source": "exact", "status": "tampered",
                         "tamper": True,
