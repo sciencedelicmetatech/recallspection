@@ -22,7 +22,7 @@
 [![License](https://img.shields.io/badge/License-AGPL--3.0%20%2F%20RIL-blue)](LICENSE)
 [![Status](https://img.shields.io/badge/status-anchor--ready-success)]()
 [![DOI](https://img.shields.io/badge/DOI-10.5281%2Fzenodo.23078584-blue?logo=zenodo&logoColor=white)](https://doi.org/10.5281/zenodo.23078584)
-
+[![agmi: measured](https://img.shields.io/badge/agmi-measured-0F4C5C)](https://agentmemoryintegrity.org/stores/recallspection-exact-anchor.html)
 </div>
 
 ---
