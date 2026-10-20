@@ -8,7 +8,7 @@
 
 `get(k)` returns the stored value or `Err(Tamper)`. Never silent wrong data.
 
-> **Architecture:** [Synthetic Intelligence Requires Exact Memory](https://doi.org/10.5281/zenodo.XXXXXXX) (Insert your new DOI here)  
+> **Architecture:** [Synthetic Intelligence Requires Exact Memory](https://https://doi.org/10.5281/zenodo.23378369)   
 > **Theorems:** [Paper 1](https://doi.org/10.5281/zenodo.23078584) (Contract), [Paper 2](https://doi.org/10.5281/zenodo.23188770) (Rollback), [Paper 3](https://doi.org/10.5281/zenodo.23199032) (Revocation), [Paper 4](https://doi.org/10.5281/zenodo.23254396) (Read-path), [Paper 5](https://doi.org/10.5281/zenodo.23263748) (Framework), [Paper 6](https://doi.org/10.5281/zenodo.23288111) (Attribution).  
 > **Spec:** [RPRS-1](spec/rprs-1.tex) normative contract.
 
