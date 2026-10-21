@@ -85,7 +85,7 @@ Status: draft, version 0.1. Comments invited.
 
 | # | Title | DOI |
 |---|---|---|
-| SI | Synthetic Intelligence Requires Exact Memory: A Dual-Layer Architecture for Trustworthy Agency | [10.5281/zenodo.XXXXXXX](https://doi.org/10.5281/zenodo.XXXXXXX) *(Update after publish)* |
+| SI | Synthetic Intelligence Requires Exact Memory: A Dual-Layer Architecture for Trustworthy Agency | [10.5281/zenodo.23378369](https://https://doi.org/10.5281/zenodo.23378369)
 | 1 | ExactMemory-Recallspection Integrity Theorem | [10.5281/zenodo.23078584](https://doi.org/10.5281/zenodo.23078584) |
 | 2 | Rollback Indistinguishability Theorem | [10.5281/zenodo.23188770](https://doi.org/10.5281/zenodo.23188770) |
 | 3 | Revocation Indistinguishability Theorem | [10.5281/zenodo.23199032](https://doi.org/10.5281/zenodo.23199032) |
