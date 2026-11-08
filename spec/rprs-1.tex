@@ -1,0 +1,111 @@
+\documentclass[11pt, a4paper]{article}
+\usepackage[utf8]{inputenc}
+\usepackage{amsmath, amssymb}
+\usepackage{geometry}
+\geometry{margin=1in}
+\usepackage{hyperref}
+\usepackage{booktabs}
+
+\title{\textbf{Read-Path Refusal Specification (RPRS-1)}\\ Version 2.0.0}
+\author{Sciencedelic Metatech}
+\date{\today}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+The Read-Path Refusal Specification (RPRS-1) defines the normative contract for a conforming memory system. A conforming system MUST return either the exact stored value or an explicit error. It MUST NOT return a value whose integrity verification has failed. RPRS-1 v2.0.0 extends the baseline specification to include \textbf{Portable Proofs}, \textbf{Cross-Anchor Monotonicity}, and \textbf{Erasure Resurrection (T10)} protection, eliminating vendor lock-in while preserving cryptographic truth.
+\end{abstract}
+
+\section{Scope and Conformance}
+A system is RPRS-1 v2.0.0 conformant if it implements the core contract (Section 2), the four cumulative levels (Section 3), the ten attack classes (Section 4), and the portable proof extension (Section 5).
+
+\section{The Core Contract}
+For any key \(k\), the read function MUST return:
+\begin{equation}
+    \texttt{get}(k) = v \quad \lor \quad \texttt{Err(Tamper)} \quad \lor \quad \texttt{Err(Missing)}
+\end{equation}
+There is no third option. A silent-wrong answer is a critical failure.
+
+\section{Conformance Levels}
+The levels are cumulative.
+\begin{itemize}
+    \item \textbf{Level L1 (Baseline):} Cryptographic tags on all records. Detects payload tamper.
+    \item \textbf{Level L2 (Audit):} Appends to a transparency log. Detects container rollback post-facto.
+    \item \textbf{Level L3 (Read-Path):} Verifies tags and log before serving. Refuses to serve tampered or rolled-back data.
+    \item \textbf{Level L4 (Anchored):} Integrates an external high-water-mark anchor (e.g., S3 Object Lock) to prevent log+container rollback.
+\end{itemize}
+
+\section{Attack Classes (T1--T10)}
+A conforming L4 system MUST reject all ten storage-level attacks on the read path.
+\begin{table}[h]
+\centering
+\begin{tabular}{@{}lll@{}}
+\toprule
+\textbf{ID} & \textbf{Attack Class} & \textbf{Required Defeat Mechanism} \\
+\midrule
+T1 & Content tamper & Record HMAC tag \\
+T2 & Tail truncation & Log chain / Append-only \\
+T3 & Middle deletion & Log chain \\
+T4 & Reordering & Monotonic version check \\
+T5 & Forged insertion & Record HMAC tag \\
+T6 & Cross-context replay & Key binding / Substitution resistance \\
+T7 & Rollback replay & \texttt{max\_version} + \texttt{per\_key\_max} \\
+T8 & Metadata tamper & HMAC covers all headers \\
+T9 & Snapshot rollback & External anchor (L4) \\
+\textbf{T10} & \textbf{Erasure resurrection} & \textbf{Tombstones + Portable Proofs} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{T10: Erasure Resurrection}
+An attacker attempts to restore a record that was legitimately deleted by importing an older state. To defeat T10, a conforming system MUST maintain signed tombstones. When importing or reading state, if a tombstone exists for key \(k\) with version \(v_{tomb}\), any record for \(k\) with version \(v_{rec} < v_{tomb}\) MUST be rejected.
+
+\section{Portable Proof Extension}
+A conforming system MUST NOT rely on vendor lock-in for its security. It MUST allow the export and import of the entire verified state.
+
+\subsection{Bundle Format}
+A Portable Bundle is a single file containing:
+\begin{itemize}
+    \item The Genesis state (or a reference to it).
+    \item All active records and tombstones.
+    \item The transparency log tip.
+    \item An anchor receipt (optional but required for L4).
+    \item A Bundle MAC signed by the container key.
+\end{itemize}
+
+\subsection{Import Verification}
+Before importing a bundle, the system MUST verify:
+\begin{enumerate}
+    \item The Bundle MAC.
+    \item The internal HMAC tags of every record.
+    \item Log monotonicity (no duplicate versions, no gaps).
+    \item Cross-anchor monotonicity (the bundle's version MUST be \(\ge\) the current anchor's version).
+\end{enumerate}
+If any check fails, the system MUST raise \texttt{TamperError} or \texttt{RollbackError} and refuse the import.
+
+\subsection{Cross-Anchor Ceremony (Reanchor)}
+To prevent lock-in, a system MUST allow migration between anchors. The \texttt{reanchor(new\_anchor)} function MUST:
+\begin{enumerate}
+    \item Verify the current log tip matches the old anchor's latest receipt.
+    \item Have the new anchor sign the old tip hash.
+    \item Begin the next epoch bound to the new anchor.
+\end{enumerate}
+This allows an enterprise to move from AWS to GCP without breaking the chain of trust.
+
+\section{Status Taxonomy}
+A conforming system MUST return one of the following statuses:
+\begin{itemize}
+    \item \texttt{ok}: Value returned, MAC verified.
+    \item \texttt{missing}: Key never existed.
+    \item \texttt{tampered}: MAC failed.
+    \item \texttt{revoked}: Record intentionally revoked by an admin.
+    \item \texttt{tombstoned}: Record intentionally deleted.
+    \item \texttt{expired}: Record past its TTL.
+\end{itemize}
+
+\section{Security Considerations}
+The system MUST assume an attacker with write access to the storage medium but without the encryption keys. The keys MUST reside outside the data file (out-of-band).
+
+\end{document}
