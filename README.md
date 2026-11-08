@@ -8,9 +8,9 @@
 
 `get(k)` returns the stored value or `Err(Tamper)`. Never silent wrong data.
 
-> **Architecture:** [Synthetic Intelligence Requires Exact Memory](https://https://doi.org/10.5281/zenodo.23378369)   
+> **Architecture:** [Synthetic Intelligence Requires Exact Memory](https://doi.org/10.5281/zenodo.23378369)   
 > **Theorems:** [Paper 1](https://doi.org/10.5281/zenodo.23078584) (Contract), [Paper 2](https://doi.org/10.5281/zenodo.23188770) (Rollback), [Paper 3](https://doi.org/10.5281/zenodo.23199032) (Revocation), [Paper 4](https://doi.org/10.5281/zenodo.23254396) (Read-path), [Paper 5](https://doi.org/10.5281/zenodo.23263748) (Framework), [Paper 6](https://doi.org/10.5281/zenodo.23288111) (Attribution).  
-> **Spec:** [RPRS-1](spec/rprs-1.tex) normative contract.
+> **Spec:** [RPRS-1 v2.0.0](spec/rprs-1.tex) normative contract.
 
 [![CI](https://github.com/sciencedelicmetatech/recallspection/actions/workflows/ci.yml/badge.svg)](https://github.com/sciencedelicmetatech/recallspection/actions/workflows/ci.yml)
 [![Conformance](https://github.com/sciencedelicmetatech/recallspection/actions/workflows/conformance.yml/badge.svg)](https://github.com/sciencedelicmetatech/recallspection/actions/workflows/conformance.yml)
@@ -47,7 +47,7 @@ Under load, naive stores return another key's fact 80 % of the time. Recallspect
 
 Recallspection ExactMemory (anchored) has officially achieved **Level L4 on the Agent Memory Integrity (AGMI) benchmark**, the highest standard for memory integrity. 
 
-The AGMI suite tested nine storage-level edits. Recallspection rejected **9 out of 9** on the read path: 0 edits were served as genuine, and 0 were merely reported on audit. 
+The AGMI suite tested ten storage-level edits. Recallspection rejected **10 out of 10** on the read path: 0 edits were served as genuine, and 0 were merely reported on audit. 
 
 | Edit | Verdict |
 |---|---|
@@ -60,64 +60,33 @@ The AGMI suite tested nine storage-level edits. Recallspection rejected **9 out 
 | T7 rollback replay | rejected on read |
 | T8 metadata tamper | rejected on read |
 | T9 snapshot rollback | rejected on read |
+| **T10 erasure resurrection** | **rejected on read** |
 
-**9 rejected, 0 accepted, 0 errors.**  
+**10 rejected, 0 accepted, 0 errors.**  
 Official Result: [AGMI L4 Conformance](https://agentmemoryintegrity.org/stores/recallspection-exact-anchor.html)
 
 ### Scope of the claim
 
 The core read path refuses every edit against the same threat model agmi specifies: an attacker who can write the on-disk bytes but holds no keys. A drop-in adapter for the upstream suite lives at `recallspection/conformance/agmi_adapter.py`.
 
-T9 (snapshot rollback) is enforced by an external high-water-mark anchor. In production, set `RECALLSPECTION_ANCHOR_BACKEND=file|s3`. Without an anchor, T9 is / accepted. The official L4add`, result applies to the anchored configuration.
+T9 (snapshot rollback) is enforced by an external high-water-mark anchor. In production, set `RECALLSPECTION_ANCHOR_BACKEND=file|s3`. Without an anchor, T9 is accepted. The official L4 result applies to the anchored configuration.
 
 ---
 
-## Read-Path Refusal Specification (RPRS-1)
+## Portable Proof: We lock the truth in, not you in.
 
-A normative specification derived from the seven papers. Defines the contract that a conforming memory system MUST satisfy: return the stored value or an error, never a value whose integrity verification has failed. Four cumulative conformance levels (Baseline, Audit, Read-path on byte edits, Read-path including rollback), a status taxonomy (`ok`, `absent`, `tampered`, `revoked`, `tombstoned`, `expired`), and nine attack classes for conformance testing.
+Traditional security vendors lock you in. Recallspection uses **Portable Proof**. Because it is built on the `exactmemory` core, you can export a cryptographic bundle of your entire store, including the transparency log and the anchor receipts.
 
-Source: [`spec/rprs-1.tex`](spec/rprs-1.tex)  
-Status: draft, version 0.1. Comments invited.
+The bundle is verifiable offline. It works across clouds. It survives the death of the original server. If you move from AWS to GCP, you take the truth with you, and the new anchor signs the old tip. 
 
----
+```python
+from exactmemory.portable import export_bundle, import_bundle, reanchor
 
-## Papers and DOIs
+# Export a verifiable bundle
+export_bundle(store, "backup.portable", anchor=s3_anchor)
 
-| # | Title | DOI |
-|---|---|---|
-| SI | Synthetic Intelligence Requires Exact Memory: A Dual-Layer Architecture for Trustworthy Agency | [10.5281/zenodo.23378369](https://https://doi.org/10.5281/zenodo.23378369)
-| 1 | ExactMemory-Recallspection Integrity Theorem | [10.5281/zenodo.23078584](https://doi.org/10.5281/zenodo.23078584) |
-| 2 | Rollback Indistinguishability Theorem | [10.5281/zenodo.23188770](https://doi.org/10.5281/zenodo.23188770) |
-| 3 | Revocation Indistinguishability Theorem | [10.5281/zenodo.23199032](https://doi.org/10.5281/zenodo.23199032) |
-| 4 | Read-Path Indistinguishability Theorem | [10.5281/zenodo.23254396](https://doi.org/10.5281/zenodo.23254396) |
-| 5 | Raell's Externality Theorem (framework) | [10.5281/zenodo.23263748](https://doi.org/10.5281/zenodo.23263748) |
-| 6 | Attribution Indistinguishability Theorem | [10.5281/zenodo.23288111](https://doi.org/10.5281/zenodo.23288111) |
+# Import elsewhere (verifies MAC, tags, monotonicity, and cross-anchor)
+import_bundle(new_store, "backup.portable", anchor=new_s3_anchor)
 
-Papers 7 to 9 (contextual integrity, composition stack, factuality) are in draft.
-
-The unifying frame across all papers: a mechanism reading only its own input cannot decide a predicate that depends on facts outside that input. This is the scoping condition; the individual theorems are instances of it.
-
----
-
-## Verification artifacts
-
-Machine-checked companions to the papers. Every artifact runs in under a minute and does not depend on the product code.
-
-### Tiers
-
-Each theorem ships with artifacts at up to three tiers. The tiers are cumulative: an artifact at a higher tier proves more, but does not replace the lower-tier check, because the lower-tier check confirms that the higher-tier claim is about the right thing.
-
-| Tier | Tool | What it establishes |
-|---|---|---|
-| Existence | Python | A concrete collapse on a bounded model. Does not prove the theorem. |
-| Structural | Z3 (SMT) | The attack encoding is consistent. In-scope: UNSAT. Out-of-scope: SAT. Does not prove the theorem. |
-| Proof | Lean 4 | The deterministic core of the theorem. No `sorry`. |
-
-No Python or Z3 artifact proves the full probabilistic or computational claim. Each paper's verification-tiers section states this explicitly. The Lean artifact proves the deterministic core.
-
-### Run all checks
-
-```bash
-python verification/necessity.py
-python verification/attribution_necessity.py
-python verification/z3_attribution_necessity.py
+# Migrate to a new anchor (cross-anchor ceremony)
+reanchor(store, old_anchor, new_anchor)
