@@ -5,7 +5,7 @@ import os
 # PUBLIC ANCHOR: Update this hash every time you release a new version.
 # Post this hash on your README, Twitter, or Zenodo paper.
 # =====================================================================
-V18_ANCHOR = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855" 
+V18_ANCHOR = "0fbd476fb6d82ffd54543cb7bd9ee90140e7d340e269e04cb2cd17ca3101a4e5" 
 VERSION = "v18"
 
 def bootstrap():
