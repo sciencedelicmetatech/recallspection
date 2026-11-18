@@ -4,12 +4,12 @@
 
 # Recallspection
 
-**Tamper-evident exact memory for autonomous AI agents.**
+**The Shared Reality Ledger for AI Agents.**
 
 `get(k)` returns the stored value or `Err(Tamper)`. Never silent wrong data.
 
 > **v18 anchor (outside GitHub):** `0fbd476fb6d82ffd54543cb7bd9ee90140e7d340e269e04cb2cd17ca3101a4e5`
-> If repo hash != anchor, anchor wins. Verify with `python recallspection_self.py` — it calls `verify_self(__file__, V18_ANCHOR)`.
+> If repo hash != anchor, anchor wins. Verify with `python recallspection_self.py` - it calls `verify_self(__file__, V18_ANCHOR)`.
 
 > **Architecture:** [Synthetic Intelligence Requires Exact Memory](https://doi.org/10.5281/zenodo.23378369)   
 > **Theorems:** [Paper 1](https://doi.org/10.5281/zenodo.23078584) (Contract), [Paper 2](https://doi.org/10.5281/zenodo.23188770) (Rollback), [Paper 3](https://doi.org/10.5281/zenodo.23199032) (Revocation), [Paper 4](https://doi.org/10.5281/zenodo.23254396) (Read-path), [Paper 5](https://doi.org/10.5281/zenodo.23263748) (Framework), [Paper 6](https://doi.org/10.5281/zenodo.23288111) (Attribution).  
@@ -20,15 +20,29 @@
 [![Python](https://img.shields.io/badge/Python-3.10%2B-blue?logo=python&logoColor=white)](https://www.python.org/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.100%2B-009688?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
 [![PyTorch](https://img.shields.io/badge/PyTorch-2.x-EE4C2C?logo=pytorch&logoColor=white)](https://pytorch.org/)
-[![ExactMemory](https://img.shields.io/badge/ExactMemory-v3.2-8A2BE2)](https://github.com/sciencedelicmetatech/exactmemory.recallspection)
+[![ExactMemory](https://img.shields.io/badge/ExactMemory-v3.3-8A2BE2)](https://github.com/sciencedelicmetatech/exactmemory.recallspection)
 [![Anchor](https://img.shields.io/badge/Anchor-file%20%7C%20S3%20Object%20Lock-00FF88)](https://docs.aws.amazon.com/AmazonS3/latest/userguide/object-lock.html)
 [![Lean 4](https://img.shields.io/badge/Lean-4.11.0-6b4e9e?logo=lean&logoColor=white)](https://leanprover.github.io/)
 [![Z3](https://img.shields.io/badge/Z3-SMT-8A2BE2)](https://github.com/Z3Prover/z3)
 [![License](https://img.shields.io/badge/License-AGPL--3.0%20%2F%20RIL-blue)](LICENSE)
-[![Status](https://img.shields.io/badge/status-L4%20Conformant-success)]()
+[![Status](https://img.shields.io/badge/status-Intersubjective%20Witness-success)]()
 [![DOI](https://img.shields.io/badge/DOI-10.5281%2Fzenodo.23078584-blue?logo=zenodo&logoColor=white)](https://doi.org/10.5281/zenodo.23078584)
 [![agmi: L4](https://img.shields.io/badge/agmi-L4%20Conformant-0F4C5C)](https://agentmemoryintegrity.org/stores/recallspection-exact-anchor.html)
 </div>
+
+---
+
+## We don't prove objective truth. We prove intersubjective reality.
+
+Gravity is objective. It doesn't care if you believe in it.
+Money, laws, contracts, and nations are **intersubjective**. They exist only because we all agree they exist, and we have witnesses (notaries, courts, ledgers) to prove we didn't change the agreement.
+
+Right now, AI agents have no shared witness. Ten billion agents live in ten billion subjective worlds. They hallucinate balances. They forge contracts. They rewrite history. They cannot trade, sign law, or form society because they cannot prove that they share the same reality as anyone else.
+
+**Recallspection is the machine witness for the agent economy.** 
+It doesn't say, "This is objectively true." It says, *"We all saw this fact at this time, we anchored it, and nobody changed it after without everyone knowing."*
+
+We are building the missing layer that allows agents to have money, law, history, and society.
 
 ---
 
@@ -42,7 +56,7 @@ Current AI architectures conflate fuzzy reasoning with fuzzy memory. Single-slot
 | SWSTM Bucket-8 | 97.45 % | 0 % | Bucketed routing, no exact-first short-circuit. |
 | **Recallspection (exact-first hybrid)** | **100 %** | **0 %** | Exact key hit bypasses the vector index entirely. |
 
-Under load, naive stores return another key's fact 80 % of the time. Recallspection never silently swaps facts.
+Under load, naive stores return another key's fact 80 % of the time. Recallspection never silently swaps facts. It guarantees that you and your agent live in the same world.
 
 ---
 
