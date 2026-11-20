@@ -11,6 +11,7 @@
 > **v18 anchor (outside GitHub):** `0fbd476fb6d82ffd54543cb7bd9ee90140e7d340e269e04cb2cd17ca3101a4e5`
 > If repo hash != anchor, anchor wins. Verify with `python recallspection_self.py` - it calls `verify_self(__file__, V18_ANCHOR)`.
 
+> **Constitution:** [The Machine Notary: Cryptographic Intersubjectivity and the Foundation of the Agent Economy](https://doi.org/10.5281/zenodo.24353182)  
 > **Architecture:** [Synthetic Intelligence Requires Exact Memory](https://doi.org/10.5281/zenodo.23378369)   
 > **Theorems:** [Paper 1](https://doi.org/10.5281/zenodo.23078584) (Contract), [Paper 2](https://doi.org/10.5281/zenodo.23188770) (Rollback), [Paper 3](https://doi.org/10.5281/zenodo.23199032) (Revocation), [Paper 4](https://doi.org/10.5281/zenodo.23254396) (Read-path), [Paper 5](https://doi.org/10.5281/zenodo.23263748) (Framework), [Paper 6](https://doi.org/10.5281/zenodo.23288111) (Attribution).  
 > **Spec:** [RPRS-1 v2.0.0](spec/rprs-1.tex) normative contract.
@@ -26,7 +27,7 @@
 [![Z3](https://img.shields.io/badge/Z3-SMT-8A2BE2)](https://github.com/Z3Prover/z3)
 [![License](https://img.shields.io/badge/License-AGPL--3.0%20%2F%20RIL-blue)](LICENSE)
 [![Status](https://img.shields.io/badge/status-Intersubjective%20Witness-success)]()
-[![DOI](https://img.shields.io/badge/DOI-10.5281%2Fzenodo.23078584-blue?logo=zenodo&logoColor=white)](https://doi.org/10.5281/zenodo.23078584)
+[![DOI](https://img.shields.io/badge/DOI-10.5281%2Fzenodo.24353182-blue?logo=zenodo&logoColor=white)](https://doi.org/10.5281/zenodo.24353182)
 [![agmi: L4](https://img.shields.io/badge/agmi-L4%20Conformant-0F4C5C)](https://agentmemoryintegrity.org/stores/recallspection-exact-anchor.html)
 </div>
 
@@ -42,11 +43,13 @@ Right now, AI agents have no shared witness. Ten billion agents live in ten bill
 **Recallspection is the machine witness for the agent economy.** 
 It doesn't say, "This is objectively true." It says, *"We all saw this fact at this time, we anchored it, and nobody changed it after without everyone knowing."*
 
-We are building the missing layer that allows agents to have money, law, history, and society.
+We are building the missing layer that allows agents to have money, law, history, and society. 
+
+*Read the full policy, economic, and philosophical framework in [The Machine Notary](https://doi.org/10.5281/zenodo.24353182).*
 
 ---
 
-## The problem
+## The Problem: The Solipsistic Swarm
 
 Current AI architectures conflate fuzzy reasoning with fuzzy memory. Single-slot memory (Mem0 / Zep style) under 5x overload collapses:
 
