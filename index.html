@@ -1,267 +1,301 @@
-<!   DOCTYPE html>
-<html lang <="en">
+<!DOCTYPE html>
+<html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta namestyle="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-    <meta name="theme-color" content="#16161d">
-    <meta name="color-scheme" content="dark">
-    <title>Recallspection – Exact Memory for AI</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;700;900&display=swap" rel="stylesheet>
-        *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
-
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="Recallspection: The Shared Reality Ledger for AI Agents. A tamper-evident, exact memory architecture for the agent economy.">
+    <title>Recallspection - The Shared Reality Ledger</title>
+    <style>
         :root {
-            --bg: #16161d;
-            --fg: #b0b0c0;
-            --fg-dim: #a0a0b8;
-            --neon: #39ff14;
-            --neon-dim: rgba(57, 255, 20, 0.2);
-            --grid: 40px;
-            --safe-top: env(safe-area-inset-top, 0px);
-            --safe-right: env(safe-area-inset-right, 0px);
-            --safe-bottom: env(safe-area-inset-bottom, 0px);
-            --safe-left: env(safe-area-inset-left, 0px);
-            --pad-x: clamp(1rem, 4vw, 4rem);
-            --pad-y: clamp(1.5rem, 4vh, 4rem);
-            --gap: clamp(1rem, 2.5vh, 2.5rem);
-            --content-max: 60rem;
+            --bg-color: #16161D; /* Eigengrau */
+            --text-main: #E6E6E6; /* Highlight Gray */
+            --text-muted: #A0A0B0;
+            --neon-green: #39FF14;
+            --card-bg: #1F1F28;
+            --border-color: #2A2A33;
         }
 
-        html {
-            -webkit-text-size-adjust: 100%;
-            text-size-adjust: 100%;
-            height: 100%;
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
         }
 
         body {
-            background-color: var(--bg);
-            color: var(--fg);
-            font-family: 'Cinzel', serif;
-            font-weight: 400;
-            min-height: 100dvh;
+            background-color: var(--bg-color);
+            color: var(--text-main);
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            line-height: 1.6;
+            padding: 0 20px;
             display: flex;
             flex-direction: column;
             align-items: center;
-            justify-content: center;
-            padding:
-                calc(var(--pad-y) + var(--safe-top))
-                calc(var(--pad-x) + var(--safe-right))
-                calc(var(--pad-y) + var(--safe-bottom))
-                calc(var(--pad-x) + var(--safe-left));
-            position: relative;
-            overflow-x: hidden;
-            overflow-wrap: break-word;
-            text-rendering: optimizeLegibility;
-        }
-
-        body::before {
-            content: '';
-            position: fixed;
-            inset: 0;
-            background-image:
-                linear-gradient(rgba(57, 255, 20, 0.03) 1px, transparent 1px),
-                linear-gradient(90deg, rgba(57, 255, 20, 0.03) 1px, transparent 1px);
-            background-size: var(--grid) var(--grid);
-            pointer-events: none;
-            z-index: 0;
         }
 
         .container {
-            position: relative;
-            z-index: 1;
+            max-width: 800px;
             width: 100%;
-            max-width: var(--content-max);
+            margin: 0 auto;
+            padding: 60px 0;
+        }
+
+        header {
             text-align: center;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            gap: var(--gap);
+            margin-bottom: 60px;
         }
 
-        .logo {
-            font-family: 'Cinzel', serif;
-            font-weight: 900;
-            font-size: clamp(2rem, 7vw + 0.5rem, 6rem);
-            letter-spacing: 0.04em;
-            line-height: 1.05;
-            color: #ffffff;
-            text-shadow:
-                0 0 10px rgba(255, 255, 255, 0.4),
-                0 0 20px rgba(255, 255, 255, 0.2),
-                0 0 40px rgba(255, 255, 255, 0.1);
-            overflow-wrap: break-word;
-            word-break: break-word;
-            text-wrap: balance;
-            max-width: 100%;
-        }
-
-        .tagline {
-            font-family: 'Cinzel', serif;
-            font-weight: 400;
-            font-size: clamp(0.65rem, 1.1vw + 0.4rem, 1.3rem);
-            letter-spacing: clamp(0.1em, 0.3vw + 0.05em, 0.25em);
-            text-transform: uppercase;
-            color: var(--neon);
-            text-shadow: 0 0 10px rgba(57, 255, 20, 0.3);
-            border-bottom: 1px solid var(--neon-dim);
-            padding-bottom: 0.85rem;
-            display: inline-block;
-            max-width: 100%;
-            text-wrap: balance;
-        }
-
-        .description {
-            font-family: 'Cinzel', serif;
-            font-weight: 400;
-            font-size: clamp(0.85rem, 0.7vw + 0.65rem, 1.15rem);
-            line-height: 1.75;
-            color: var(--fg-dim);
-            max-width: 42ch;
-            letter-spacing: 0.03em;
-            text-wrap: pretty;
-        }
-
-        .description strong { color: var(--neon); font-weight: 700; }
-        .description br { display: none; }
-        @media (max-width: 600px) { .description br { display: inline; } }
-
-        .cta {
-            font-family: 'Cinzel', serif;
+        h1 {
+            font-size: 3rem;
             font-weight: 700;
-            font-size: clamp(0.85rem, 0.6vw + 0.75rem, 1.05rem);
-            letter-spacing: 0.15em;
-            text-transform: uppercase;
-            padding: 0.9rem 2rem;
-            background: transparent;
-            color: var(--neon);
-            border: 2px solid var(--neon);
-            border-radius: 0;
-            cursor: pointer;
-            transition: all 0.3s ease;
+            color: #FFFFFF;
+            margin-bottom: 16px;
+            letter-spacing: -0.5px;
+        }
+
+        .subtitle {
+            font-size: 1.25rem;
+            color: var(--neon-green);
+            font-weight: 600;
+            margin-bottom: 24px;
+        }
+
+        .contract-box {
+            background-color: var(--card-bg);
+            border: 1px solid var(--border-color);
+            border-left: 4px solid var(--neon-green);
+            padding: 20px;
+            border-radius: 4px;
+            font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+            font-size: 1.1rem;
+            margin: 30px 0;
+            text-align: left;
+        }
+
+        .contract-box span {
+            color: var(--neon-green);
+        }
+
+        h2 {
+            font-size: 1.75rem;
+            color: #FFFFFF;
+            margin: 50px 0 20px 0;
+            border-bottom: 1px solid var(--border-color);
+            padding-bottom: 10px;
+        }
+
+        p {
+            margin-bottom: 20px;
+            font-size: 1.1rem;
+        }
+
+        .muted {
+            color: var(--text-muted);
+            font-size: 0.95rem;
+        }
+
+        a {
+            color: var(--neon-green);
             text-decoration: none;
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            min-height: 48px;
-            min-width: 200px;
-            box-shadow: 0 0 15px rgba(57, 255, 20, 0.15);
-            position: relative;
-            overflow: hidden;
-            -webkit-tap-highlight-color: transparent;
-            touch-action: manipulation;
+            border-bottom: 1px solid transparent;
+            transition: border-bottom 0.2s;
         }
 
-        .cta::before {
-            content: '';
-            position: absolute;
-            inset: 0;
-            background: var(--neon);
-            transform: scaleX(0);
-            transform-origin: right;
-            transition: transform 0.4s ease;
-            z-index: -1;
+        a:hover {
+            border-bottom: 1px solid var(--neon-green);
         }
 
-        .cta:focus-visible {
-            color: var(--bg);
-            box-shadow: 0 0 30px rgba(57, 255, 20, 0.3);
-            outline: 2px solid var(--neon);
-            outline-offset: 4px;
-        }
-        .cta:focus-visible::before {
-            transform: scaleX(1);
-            transform-origin: left;
+        .btn-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 16px;
+            margin: 30px 0;
         }
 
-        @media (hover: hover) and (pointer: fine) {
-            .cta:hover {
-                color: var(--bg);
-                box-shadow: 0 0 30px rgba(57, 255, 20, 0.3);
-            }
-            .cta:hover::before {
-                transform: scaleX(1);
-                transform-origin: left;
-            }
-        }
-
-        .status {
-            font-family: 'Cinzel', serif;
-            font-weight: 400;
-            font-size: clamp(0.55rem, 0.4vw + 0.45rem, 0.75rem);
-            letter-spacing: 0.15em;
-            color: var(--neon);
-            opacity: 0.5;
-            border-top: 1px solid rgba(57, 255, 20, 0.1);
-            padding-top: 1.25rem;
-            width: 100%;
-            max-width: 32rem;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            flex-wrap: wrap;
-            gap: 0.5rem 1.2rem;
-            text-transform: uppercase;
-        }
-
-        .status span { color: var(--neon); opacity: 0.75; white-space: nowrap; }
-        .status .dot {
+        .btn {
             display: inline-block;
-            width: 6px; height: 6px;
-            background: var(--neon);
-            border-radius: 50%;
-            margin-right: 6px;
-            vertical-align: middle;
-            animation: pulse 2s infinite;
+            background-color: transparent;
+            color: var(--neon-green);
+            border: 1px solid var(--neon-green);
+            padding: 12px 24px;
+            text-align: center;
+            border-radius: 4px;
+            font-weight: 600;
+            text-decoration: none;
+            transition: all 0.2s;
         }
 
-        @keyframes pulse {
-            0%, 100% { opacity: 0.2; }
-            50% { opacity: 1; }
+        .btn:hover {
+            background-color: var(--neon-green);
+            color: var(--bg-color);
+            border-bottom: 1px solid var(--neon-green);
         }
 
-        @media (max-width: 480px) {
-            :root { --grid: 28px; }
-            body { justify-content: flex-start; }
-            .cta { width: 100%; max-width: 22rem; }
-            .status { gap: 0.4rem 0.8rem; letter-spacing: 0.1em; }
+        .btn-primary {
+            background-color: var(--neon-green);
+            color: var(--bg-color);
         }
 
-        @media (min-width: 481px) and (max-width: 900px) { :root { --grid: 32px; } }
-        @media (min-width: 901px) and (max-width: 1400px) { :root { --grid: 44px; } }
-        @media (min-width: 1401px) { :root { --grid: 52px; } body { padding: 5rem 4rem; } }
-
-        @media (max-height: 620px) and (min-width: 481px) {
-            body { justify-content: flex-start; padding-top: 2.5rem; padding-bottom: 2.5rem; }
-            .logo { font-size: clamp(2rem, 5vw, 3.2rem); }
+        .btn-primary:hover {
+            background-color: #2ecc71;
+            border-color: #2ecc71;
         }
 
-        @media (prefers-reduced-motion: reduce) {
-            *, *::before, *::after {
-                animation-duration: 0.01ms !important;
-                animation-iteration-count: 1 !important;
-                transition-duration: 0.01ms !important;
+        ul {
+            list-style-type: none;
+            margin-bottom: 20px;
+        }
+
+        ul li {
+            margin-bottom: 12px;
+            padding-left: 24px;
+            position: relative;
+        }
+
+        ul li::before {
+            content: "→";
+            position: absolute;
+            left: 0;
+            color: var(--neon-green);
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 20px 0;
+            font-size: 1rem;
+        }
+
+        th, td {
+            text-align: left;
+            padding: 12px;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        th {
+            color: var(--neon-green);
+            font-weight: 600;
+        }
+
+        footer {
+            margin-top: 60px;
+            padding-top: 20px;
+            border-top: 1px solid var(--border-color);
+            text-align: center;
+            color: var(--text-muted);
+            font-size: 0.9rem;
+        }
+
+        @media (max-width: 600px) {
+            .btn-grid {
+                grid-template-columns: 1fr;
+            }
+            h1 {
+                font-size: 2.2rem;
             }
         }
     </style>
 </head>
 <body>
-    <main class="container">
-        <h1 class="logo">Recallspection</h1>
-        <p class="tagline">Exact Memory. Zero Hallucinations.</p>
-        <p class="description">
-            The first dual&#8209;core memory for AI agents.<br>
-            <strong>Cryptographic</strong> precision &middot;
-            <strong>Neural</strong> fuzziness &middot;
-            <strong>100%</strong> exact recall.
-        </p>
-        <a href="/docs" target="_blank" rel="noopener" class="cta">Get Your API Key</a>
-        <div class="status" role="status" aria-live="polite">
-            <span><span class="dot" aria-hidden="true"></span>LIVE</span>
-            <span>v18.0.0</span>
-            <span>&#8734; FACTS</span>
+
+<div class="container">
+    <header>
+        <h1>Recallspection</h1>
+        <div class="subtitle">The Shared Reality Ledger for AI Agents</div>
+        
+        <div class="contract-box">
+            get(k) = <span>value</span> or <span>Err(Tamper)</span><br>
+            <span style="color: var(--text-muted); font-size: 0.9rem;">// No silent wrong data.</span>
         </div>
-    </main>
+
+        <div class="btn-grid">
+            <a href="https://doi.org/10.5281/zenodo.24353182" class="btn btn-primary">Read: The Machine Notary</a>
+            <a href="https://github.com/sciencedelicmetatech/recallspection" class="btn">View on GitHub</a>
+        </div>
+    </header>
+
+    <section>
+        <h2>We don't prove objective truth. We prove intersubjective reality.</h2>
+        <p>Gravity is objective. It doesn't care if you believe in it.</p>
+        <p>Money, laws, contracts, and nations are <strong>intersubjective</strong>. They exist only because we all agree they exist, and we have witnesses (notaries, courts, ledgers) to prove we didn't change the agreement.</p>
+        <p>Right now, AI agents have no shared witness. Ten billion agents live in ten billion subjective worlds. They hallucinate balances. They forge contracts. They rewrite history. They cannot trade, sign law, or form society because they cannot prove that they share the same reality as anyone else.</p>
+        <p><strong>Recallspection is the machine witness for the agent economy.</strong> It doesn't say, "This is objectively true." It says, <em>"We all saw this fact at this time, we anchored it, and nobody changed it after without everyone knowing."</em></p>
+    </section>
+
+    <section>
+        <h2>The Solipsistic Swarm</h2>
+        <p>Current AI architectures conflate fuzzy reasoning with fuzzy memory. Single-slot memory (Mem0 / Zep style) under 5x overload collapses:</p>
+        
+        <table>
+            <thead>
+                <tr>
+                    <th>Store</th>
+                    <th>Recall</th>
+                    <th>Silent wrong</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td>Naive single-slot</td>
+                    <td>19.84 %</td>
+                    <td style="color: #ff4d4d;">80.16 %</td>
+                </tr>
+                <tr>
+                    <td>SWSTM Bucket-8</td>
+                    <td>97.45 %</td>
+                    <td>0 %</td>
+                </tr>
+                <tr>
+                    <td><strong>Recallspection (hybrid)</strong></td>
+                    <td><strong style="color: var(--neon-green);">100 %</strong></td>
+                    <td><strong style="color: var(--neon-green);">0 %</strong></td>
+                </tr>
+            </tbody>
+        </table>
+        <p class="muted">Under load, naive stores return another key's fact 80% of the time. Recallspection guarantees that you and your agent live in the same world.</p>
+    </section>
+
+    <section>
+        <h2>Official AGMI Level L4 Conformance</h2>
+        <p>Recallspection ExactMemory (anchored) has officially achieved <strong>Level L4 on the Agent Memory Integrity (AGMI) benchmark</strong>, the highest standard for memory integrity.</p>
+        <p>The AGMI suite tested ten storage-level edits. Recallspection rejected <strong>10 out of 10</strong> on the read path.</p>
+        
+        <ul>
+            <li><strong>Provenance (Who):</strong> Double signature. Container signs writer, writer signs payload. Source binding prevents email spoofing.</li>
+            <li><strong>Continuity (When):</strong> Hash chain and monotonic version counters. Any rollback triggers an explicit error.</li>
+            <li><strong>Consensus (Who saw it):</strong> Remote anchor (S3 Object Lock) as external high-water mark. If the log and container are rolled back together, the anchor rejects it.</li>
+        </ul>
+
+        <div style="margin-top: 20px;">
+            <a href="https://agentmemoryintegrity.org/stores/recallspection-exact-anchor.html">View Official L4 Conformance Result →</a>
+        </div>
+    </section>
+
+    <section>
+        <h2>Research & Publications</h2>
+        <ul>
+            <li><a href="https://doi.org/10.5281/zenodo.24353182">The Machine Notary: Cryptographic Intersubjectivity and the Foundation of the Agent Economy</a> (v2)</li>
+            <li><a href="https://doi.org/10.5281/zenodo.23378369">Synthetic Intelligence Requires Exact Memory</a> (Technical Architecture)</li>
+            <li><a href="https://doi.org/10.5281/zenodo.23078584">Paper 1: ExactMemory-Recallspection Integrity Theorem</a></li>
+            <li><a href="https://doi.org/10.5281/zenodo.23188770">Paper 2: Rollback Indistinguishability Theorem</a></li>
+            <li><a href="https://doi.org/10.5281/zenodo.23199032">Paper 3: Revocation Indistinguishability Theorem</a></li>
+            <li><a href="https://doi.org/10.5281/zenodo.23254396">Paper 4: Read-Path Indistinguishability Theorem</a></li>
+            <li><a href="https://doi.org/10.5281/zenodo.23263748">Paper 5: Raell's Externality Theorem</a></li>
+            <li><a href="https://doi.org/10.5281/zenodo.23288111">Paper 6: Attribution Indistinguishability Theorem</a></li>
+        </ul>
+    </section>
+
+    <section>
+        <h2>Portable Proof: We lock the truth in, not you in.</h2>
+        <p>Traditional security vendors lock you in. Recallspection uses <strong>Portable Proof</strong>. You can export a cryptographic bundle of your entire store, including the transparency log and the anchor receipts.</p>
+        <p>The bundle is verifiable offline. It works across clouds. It survives the death of the original server. If you move from AWS to GCP, you take the truth with you, and the new anchor signs the old tip.</p>
+    </section>
+
+    <footer>
+        <p>&copy; 2026 Sciencedelic Metatech.</p>
+        <p>v18 Anchor: <code style="color: var(--neon-green); font-size: 0.8rem;">0fbd476fb6d82ffd54543cb7bd9ee90140e7d340e269e04cb2cd17ca3101a4e5</code></p>
+        <p>If repo hash != anchor, anchor wins.</p>
+    </footer>
+</div>
+
 </body>
 </html>
